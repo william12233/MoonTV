@@ -5,6 +5,7 @@
 import { ChevronRight } from 'lucide-react';
 import Link from 'next/link';
 import { Suspense, useEffect, useState } from 'react';
+import Swal from 'sweetalert2';
 
 import {
   BangumiCalendarData,
@@ -24,11 +25,12 @@ import CapsuleSwitch from '@/components/CapsuleSwitch';
 import ContinueWatching from '@/components/ContinueWatching';
 import PageLayout from '@/components/PageLayout';
 import ScrollableRow from '@/components/ScrollableRow';
+import { useNavigationLoading } from '@/components/NavigationLoadingProvider';
 import { useSite } from '@/components/SiteProvider';
 import VideoCard from '@/components/VideoCard';
 
 function HomeClient() {
-  const [activeTab, setActiveTab] = useState<'home' | 'favorites'>('home');
+  const [activeTab, setActiveTab] = useState<'home' | 'history' | 'favorites'>('home');
   const [hotMovies, setHotMovies] = useState<DoubanItem[]>([]);
   const [hotTvShows, setHotTvShows] = useState<DoubanItem[]>([]);
   const [hotVarietyShows, setHotVarietyShows] = useState<DoubanItem[]>([]);
@@ -37,6 +39,7 @@ function HomeClient() {
   >([]);
   const [loading, setLoading] = useState(true);
   const { announcement } = useSite();
+  const { startLoading } = useNavigationLoading();
 
   const [showAnnouncement, setShowAnnouncement] = useState(false);
   
@@ -195,17 +198,24 @@ function HomeClient() {
         {/* 顶部 Tab 切换 */}
         <div className='mb-8 flex justify-center'>
           <CapsuleSwitch
-            options={[
+            options={simpleMode ? [
+              { label: '历史', value: 'history' },
+              { label: '收藏夹', value: 'favorites' },
+            ] : [
               { label: '首页', value: 'home' },
+              { label: '历史', value: 'history' },
               { label: '收藏夹', value: 'favorites' },
             ]}
-            active={activeTab}
-            onChange={(value) => setActiveTab(value as 'home' | 'favorites')}
+            active={simpleMode && activeTab === 'home' ? 'history' : activeTab}
+            onChange={(value) => setActiveTab(value as 'home' | 'history' | 'favorites')}
           />
         </div>
 
         <div className='max-w-[95%] mx-auto'>
-          {activeTab === 'favorites' ? (
+          {activeTab === 'history' ? (
+            // 历史视图 - 显示所有播放记录的网格布局
+            <ContinueWatching showAll={true} />
+          ) : activeTab === 'favorites' ? (
             // 收藏夹视图
             <section className='mb-8'>
               <div className='mb-4 flex items-center justify-between'>
@@ -216,8 +226,25 @@ function HomeClient() {
                   <button
                     className='text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
                     onClick={async () => {
-                      await clearAllFavorites();
-                      setFavoriteItems([]);
+                      const { isConfirmed } = await Swal.fire({
+                        title: '确认清空',
+                        text: '确定要清空所有收藏吗？',
+                        icon: 'warning',
+                        showCancelButton: true,
+                        confirmButtonText: '确定',
+                        cancelButtonText: '取消',
+                      });
+                      if (isConfirmed) {
+                        await clearAllFavorites();
+                        setFavoriteItems([]);
+                        Swal.fire({
+                          icon: 'success',
+                          title: '已清空',
+                          text: '所有收藏已清空',
+                          timer: 2000,
+                          showConfirmButton: false,
+                        });
+                      }
                     }}
                   >
                     清空
@@ -259,6 +286,7 @@ function HomeClient() {
                       </h2>
                       <Link
                         href='/douban?type=movie'
+                        onClick={startLoading}
                         className='flex items-center text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
                       >
                         查看更多
@@ -307,6 +335,7 @@ function HomeClient() {
                       </h2>
                       <Link
                         href='/douban?type=tv'
+                        onClick={startLoading}
                         className='flex items-center text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
                       >
                         查看更多
@@ -354,6 +383,7 @@ function HomeClient() {
                       </h2>
                       <Link
                         href='/douban?type=anime'
+                        onClick={startLoading}
                         className='flex items-center text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
                       >
                         查看更多
@@ -429,6 +459,7 @@ function HomeClient() {
                       </h2>
                       <Link
                         href='/douban?type=show'
+                        onClick={startLoading}
                         className='flex items-center text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
                       >
                         查看更多

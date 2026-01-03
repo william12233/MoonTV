@@ -576,6 +576,16 @@ export async function savePlayRecord(
   if (STORAGE_TYPE !== 'localstorage') {
     // 立即更新缓存
     const cachedRecords = cacheManager.getCachedPlayRecords() || {};
+    
+    // 删除同名的旧记录
+    if (record.title) {
+      Object.keys(cachedRecords).forEach((existingKey) => {
+        if (existingKey !== key && cachedRecords[existingKey].title === record.title) {
+          delete cachedRecords[existingKey];
+        }
+      });
+    }
+    
     cachedRecords[key] = record;
     cacheManager.cachePlayRecords(cachedRecords);
 
@@ -611,6 +621,16 @@ export async function savePlayRecord(
 
   try {
     const allRecords = await getAllPlayRecords();
+    
+    // 删除同名的旧记录
+    if (record.title) {
+      Object.keys(allRecords).forEach((existingKey) => {
+        if (existingKey !== key && allRecords[existingKey].title === record.title) {
+          delete allRecords[existingKey];
+        }
+      });
+    }
+    
     allRecords[key] = record;
     localStorage.setItem(PLAY_RECORDS_KEY, JSON.stringify(allRecords));
     window.dispatchEvent(

@@ -487,6 +487,10 @@ export const UserMenu: React.FC = () => {
     setDoubanImageProxyType(defaultDoubanImageProxyType);
     setDoubanImageProxyUrl(defaultDoubanImageProxyUrl);
 
+    setEnablePreferBestSource(false);
+    setAutoDanmakuEnabled(false);
+    setPreferredDanmakuPlatform('bilibili1');
+
     if (typeof window !== 'undefined') {
       localStorage.setItem('defaultAggregateSearch', JSON.stringify(true));
       localStorage.setItem('defaultStreamSearch', JSON.stringify(true));
@@ -497,6 +501,7 @@ export const UserMenu: React.FC = () => {
       localStorage.setItem('doubanImageProxyType', defaultDoubanImageProxyType);
       localStorage.setItem('doubanImageProxyUrl', defaultDoubanImageProxyUrl);
       
+      localStorage.setItem('enablePreferBestSource', JSON.stringify(false));
       localStorage.setItem('autoDanmakuEnabled', JSON.stringify(false));
       localStorage.setItem('preferredDanmakuPlatform', 'bilibili1');
     }

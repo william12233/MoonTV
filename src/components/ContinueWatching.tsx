@@ -2,6 +2,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Swal from 'sweetalert2';
 
 import type { PlayRecord } from '@/lib/db.client';
 import {
@@ -15,9 +16,11 @@ import VideoCard from '@/components/VideoCard';
 
 interface ContinueWatchingProps {
   className?: string;
+  showAll?: boolean; // 是否显示所有记录（网格布局）
+  hideHeader?: boolean; // 是否隐藏标题栏
 }
 
-export default function ContinueWatching({ className }: ContinueWatchingProps) {
+export default function ContinueWatching({ className, showAll = false, hideHeader = false }: ContinueWatchingProps) {
   const [playRecords, setPlayRecords] = useState<
     (PlayRecord & { key: string })[]
   >([]);
@@ -100,24 +103,43 @@ export default function ContinueWatching({ className }: ContinueWatchingProps) {
 
   return (
     <section className={`mb-8 ${className || ''}`}>
-      <div className='mb-4 flex items-center justify-between'>
-        <h2 className='text-xl font-bold text-gray-800 dark:text-gray-200'>
-          继续观看
-        </h2>
-        {!loading && playRecords.length > 0 && (
-          <button
-            className='text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
-            onClick={async () => {
-              await clearAllPlayRecords();
-              setPlayRecords([]);
-            }}
-          >
-            清空
-          </button>
-        )}
-      </div>
+      {!hideHeader && (
+        <div className='mb-4 flex items-center justify-between'>
+          <h2 className='text-xl font-bold text-gray-800 dark:text-gray-200'>
+            继续观看
+          </h2>
+          {!loading && playRecords.length > 0 && (
+            <button
+              className='text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+              onClick={async () => {
+                const { isConfirmed } = await Swal.fire({
+                  title: '确认清空',
+                  text: '确定要清空所有播放记录吗？',
+                  icon: 'warning',
+                  showCancelButton: true,
+                  confirmButtonText: '确定',
+                  cancelButtonText: '取消',
+                });
+                if (isConfirmed) {
+                  await clearAllPlayRecords();
+                  setPlayRecords([]);
+                  Swal.fire({
+                    icon: 'success',
+                    title: '已清空',
+                    text: '所有播放记录已清空',
+                    timer: 2000,
+                    showConfirmButton: false,
+                  });
+                }
+              }}
+            >
+              清空
+            </button>
+          )}
+        </div>
+      )}
       
-      {isClient && simpleMode ? (
+      {isClient && (simpleMode || showAll) ? (
         // 简洁模式：使用网格布局，类似收藏夹
         <div className='justify-start grid grid-cols-3 gap-x-2 gap-y-14 sm:gap-y-20 px-0 sm:px-2 sm:grid-cols-[repeat(auto-fill,_minmax(11rem,_1fr))] sm:gap-x-8'>
           {loading

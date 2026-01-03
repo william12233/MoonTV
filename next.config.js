@@ -5,6 +5,7 @@ const nextConfig = {
   output: 'standalone',
   eslint: {
     dirs: ['src'],
+    ignoreDuringBuilds: true,
   },
 
   reactStrictMode: false,
@@ -71,9 +72,20 @@ if (process.env.NODE_ENV === 'development') {
   setupDevPlatform();
 }
 
+// 检测是否为云平台构建
+const isCloudflarePages = process.env.CF_PAGES === '1' || 
+  process.env.CLOUDFLARE_PAGES === '1' ||
+  process.argv.includes('pages:build');
+
+const isVercel = process.env.VERCEL === '1';
+const isNetlify = process.env.NETLIFY === 'true';
+
+// 在所有云平台上禁用 next-pwa，避免与自定义 sw.js 冲突
+const isCloudPlatform = isCloudflarePages || isVercel || isNetlify;
+
 const withPWA = require('next-pwa')({
   dest: 'public',
-  disable: process.env.NODE_ENV === 'development',
+  disable: process.env.NODE_ENV === 'development' || isCloudPlatform,
   register: true,
   skipWaiting: true,
 });

@@ -5,7 +5,7 @@
 import { Cat, Clover, Film, Home, Search, Star, Tv } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
 
 import { getCustomCategories } from '@/lib/config.client';
 
@@ -159,4 +159,5 @@ const MobileBottomNav = ({ activePath }: MobileBottomNavProps) => {
   );
 };
 
-export default MobileBottomNav;
+// 使用 React.memo 优化，避免父组件更新时导致不必要的重新渲染
+export default memo(MobileBottomNav);

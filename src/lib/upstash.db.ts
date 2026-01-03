@@ -80,6 +80,23 @@ export class UpstashRedisStorage implements IStorage {
     key: string,
     record: PlayRecord
   ): Promise<void> {
+    // 删除同名的旧记录
+    if (record.title) {
+      const pattern = `u:${userName}:pr:*`;
+      const allKeys: string[] = await withRetry(() => this.client.keys(pattern));
+      
+      for (const fullKey of allKeys) {
+        const val = await withRetry(() => this.client.get(fullKey));
+        if (val) {
+          const existingRecord = val as PlayRecord;
+          // 如果找到同名但不是当前key的记录，则删除它
+          if (existingRecord.title === record.title && fullKey !== this.prKey(userName, key)) {
+            await withRetry(() => this.client.del(fullKey));
+          }
+        }
+      }
+    }
+
     await withRetry(() => this.client.set(this.prKey(userName, key), record));
   }
 

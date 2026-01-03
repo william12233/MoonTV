@@ -182,6 +182,19 @@ export class D1Storage implements IStorage {
     }
     const userId = await this.ensureUser(userName);
 
+    // 删除同名的旧记录
+    if (record.title) {
+      await this.db
+        .prepare(
+          `
+          DELETE FROM play_records 
+          WHERE user_id = ? AND title = ? AND NOT (source = ? AND video_id = ?)
+        `
+        )
+        .bind(userId, record.title, source, videoId)
+        .run();
+    }
+
     await this.db
       .prepare(
         `

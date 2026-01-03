@@ -23,6 +23,7 @@ export interface AdminConfig {
       role: 'user' | 'admin' | 'owner';
       banned?: boolean;
       group?: string;
+      lastOnline?: number;
     }[];
     Groups?: {
       name: string;

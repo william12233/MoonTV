@@ -636,6 +636,7 @@ export function configSelfCheck(adminConfig: AdminConfig): AdminConfig {
 
   // 站长变更自检
   const ownerUser = process.env.USERNAME;
+  const originalOwner = adminConfig.UserConfig.Users.find((u) => u.username === ownerUser);
 
   // 去重
   const seenUsernames = new Set<string>();
@@ -658,7 +659,9 @@ export function configSelfCheck(adminConfig: AdminConfig): AdminConfig {
   adminConfig.UserConfig.Users.unshift({
     username: ownerUser!,
     role: 'owner',
-    banned: false,
+    banned: originalOwner?.banned ?? false,
+    group: originalOwner?.group,
+    lastOnline: originalOwner?.lastOnline,
   });
 
   // 采集源去重

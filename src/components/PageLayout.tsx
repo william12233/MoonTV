@@ -1,39 +1,19 @@
-import MobileBottomNav from './MobileBottomNav';
-import MobileHeader from './MobileHeader';
-import TopNav from './TopNav';
+/**
+ * PageLayout 组件 - 简化版
+ * 导航栏已提升到根布局（layout.tsx），此组件仅用于内容容器
+ * 保留此组件是为了向后兼容，避免大量页面修改
+ */
 
 interface PageLayoutProps {
   children: React.ReactNode;
-  activePath?: string;
+  activePath?: string; // 保留但已不使用，activePath 由导航栏组件自动检测
 }
 
-const PageLayout = ({ children, activePath = '/' }: PageLayoutProps) => {
+const PageLayout = ({ children }: PageLayoutProps) => {
   return (
-    <div className='w-full min-h-screen'>
-      {/* 移动端头部 */}
-      <MobileHeader showBackButton={false} />
-
-      {/* 桌面端顶部导航栏 */}
-      <TopNav activePath={activePath} />
-
-      {/* 主内容区域 */}
-      <div className='relative w-full'>
-        {/* 主内容 */}
-        <main
-          className='flex-1 mb-14 md:mb-0'
-          style={{
-            paddingBottom: 'calc(3.5rem + env(safe-area-inset-bottom))',
-          }}
-        >
-          {children}
-        </main>
-      </div>
-
-      {/* 移动端底部导航 */}
-      <div className='md:hidden'>
-        <MobileBottomNav activePath={activePath} />
-      </div>
-    </div>
+    <>
+      {children}
+    </>
   );
 };
 
