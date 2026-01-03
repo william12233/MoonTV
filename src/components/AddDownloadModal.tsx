@@ -17,6 +17,7 @@ interface AddDownloadModalProps {
     startSegment: number;
     endSegment: number;
     streamMode: StreamSaverMode;
+    maxRetries: number; // 最大重试次数
     parsedTask: M3U8Task;
   }) => void;
   initialUrl?: string;
@@ -50,6 +51,7 @@ const AddDownloadModal = ({ isOpen, onClose, onAddTask, initialUrl = '', initial
   const [startSegment, setStartSegment] = useState(1);
   const [endSegment, setEndSegment] = useState(0);
   const [concurrency, setConcurrency] = useState(6);
+  const [maxRetries, setMaxRetries] = useState(3); // 默认重试3次
   const [streamMode, setStreamMode] = useState<StreamSaverMode>('disabled');
   const [editableUrl, setEditableUrl] = useState('');
   const [editableTitle, setEditableTitle] = useState('');
@@ -89,10 +91,12 @@ const AddDownloadModal = ({ isOpen, onClose, onAddTask, initialUrl = '', initial
     if (typeof window !== 'undefined') {
       const savedDownloadType = localStorage.getItem('downloadType') as 'TS' | 'MP4' | null;
       const savedConcurrency = localStorage.getItem('concurrency');
+      const savedMaxRetries = localStorage.getItem('maxRetries');
       const savedStreamMode = localStorage.getItem('streamMode') as StreamSaverMode | null;
       
       if (savedDownloadType) setDownloadType(savedDownloadType);
       if (savedConcurrency) setConcurrency(parseInt(savedConcurrency, 10));
+      if (savedMaxRetries) setMaxRetries(parseInt(savedMaxRetries, 10));
       if (savedStreamMode) setStreamMode(savedStreamMode);
     }
   }, []);
@@ -102,9 +106,10 @@ const AddDownloadModal = ({ isOpen, onClose, onAddTask, initialUrl = '', initial
     if (typeof window !== 'undefined') {
       localStorage.setItem('downloadType', downloadType);
       localStorage.setItem('concurrency', concurrency.toString());
+      localStorage.setItem('maxRetries', String(maxRetries));
       localStorage.setItem('streamMode', streamMode);
     }
-  }, [downloadType, concurrency, streamMode]);
+  }, [downloadType, concurrency, maxRetries, streamMode]);
 
   // 当模态框打开时，设置初始值
   useEffect(() => {
@@ -193,6 +198,7 @@ const AddDownloadModal = ({ isOpen, onClose, onAddTask, initialUrl = '', initial
       startSegment,
       endSegment,
       streamMode,
+      maxRetries,
       parsedTask: task,
     });
 
@@ -312,7 +318,24 @@ const AddDownloadModal = ({ isOpen, onClose, onAddTask, initialUrl = '', initial
               <span>16 线程</span>
             </div>
           </div>
-
+          {/* 重试次数 */}
+          <div>
+            <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+              失败重试次数: {maxRetries}
+            </label>
+            <input
+              type="range"
+              min="0"
+              max="10"
+              value={maxRetries}
+              onChange={(e) => setMaxRetries(parseInt(e.target.value, 10))}
+              className="w-full"
+            />
+            <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400 mt-1">
+              <span>不重试</span>
+              <span>10 次</span>
+            </div>
+          </div>
           {/* 边下边存模式 */}
           <div>
             <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">

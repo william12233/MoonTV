@@ -28,13 +28,17 @@ export async function createFileSystemWriteStream(
   }
 
   try {
+    // 根据文件名后缀动态设置 accept 类型，避免移动端总是 .m3u8
+    let acceptExt = '.ts';
+    if (filename.toLowerCase().endsWith('.mp4')) acceptExt = '.mp4';
+    else if (filename.toLowerCase().endsWith('.ts')) acceptExt = '.ts';
     const options: any = {
       suggestedName: filename,
       types: [
         {
           description: 'Video files',
           accept: {
-            'video/*': ['.mp4', '.ts', '.m3u8'],
+            'video/*': [acceptExt],
           },
         },
       ],

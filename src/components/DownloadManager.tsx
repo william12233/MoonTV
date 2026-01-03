@@ -12,7 +12,7 @@ interface DownloadTask {
   id: string;
   url: string;
   title: string;
-  status: 'waiting' | 'downloading' | 'paused' | 'completed' | 'error';
+  status: 'waiting' | 'downloading' | 'paused' | 'completed' | 'error' | 'merging';
   progress: number;
   current: number;
   total: number;
@@ -26,6 +26,7 @@ interface DownloadTask {
     startSegment: number;
     endSegment: number;
     streamMode?: StreamSaverMode;
+    maxRetries?: number; // 最大重试次数
     parsedTask?: M3U8Task;
   };
   // 片段信息（用于查看和重试）
@@ -50,6 +51,8 @@ const DownloadManager = ({ isOpen, onClose }: DownloadManagerProps) => {
   const hasAutoResumed = useRef(false);
   // 标记页面是否正在卸载
   const isUnloading = useRef(false);
+  // 防止重复触发合并的标记
+  const mergingTaskIds = useRef(new Set<string>());
   
   // 同步 tasks 到 ref
   useEffect(() => {
@@ -121,6 +124,7 @@ const DownloadManager = ({ isOpen, onClose }: DownloadManagerProps) => {
           startSegment: config.startSegment,
           endSegment: config.endSegment,
           streamMode: config.streamMode,
+          maxRetries: config.maxRetries,
         } : undefined,
         // 保存原始状态，用于恢复时判断
         _originalStatus: rest.status,
@@ -165,7 +169,8 @@ const DownloadManager = ({ isOpen, onClose }: DownloadManagerProps) => {
     rangeMode: boolean,
     startSegment: number,
     endSegment: number,
-    streamMode: StreamSaverMode = 'disabled'
+    streamMode: StreamSaverMode = 'disabled',
+    maxRetries = 3
   ) => {
     try {
       // 不要创建新对象，直接使用传入的 parsedTask
@@ -185,14 +190,20 @@ const DownloadManager = ({ isOpen, onClose }: DownloadManagerProps) => {
         (prog: DownloadProgress) => {
           setTasks(prev => prev.map(t => {
             if (t.id !== taskId) return t;
+            // 合并中时不更新进度
+            if (t.status === 'merging') return t;
             
             // 创建新的 parsedTask 引用以触发重新渲染
+            // 注意：downloadedSegments 是 Map，需要保持引用以便数据共享
+            // 重要：finishList 也保持引用，避免覆盖手动重试的状态
             const updatedParsedTask = t.parsedTask ? {
               ...t.parsedTask,
               finishNum: parsedTask.finishNum,
               errorNum: parsedTask.errorNum,
-              // 深拷贝 finishList 数组及其元素
-              finishList: parsedTask.finishList.map(item => ({ ...item })),
+              // 保持 finishList 的引用，不要覆盖（手动重试可能已更新）
+              finishList: parsedTask.finishList,
+              // 保持 downloadedSegments 的引用，确保数据共享
+              downloadedSegments: parsedTask.downloadedSegments,
             } : undefined;
             
             return { 
@@ -200,23 +211,42 @@ const DownloadManager = ({ isOpen, onClose }: DownloadManagerProps) => {
               progress: prog.percentage,
               current: prog.current,
               total: prog.total,
-              status: prog.status === 'done' ? 'completed' : 'downloading',
+              status: prog.status === 'done' ? 'completed' : prog.status === 'error' ? 'error' : 'downloading',
               parsedTask: updatedParsedTask,
             };
           }));
         },
         controller.signal,
         concurrency,
-        streamMode
+        streamMode,
+        maxRetries
       );
       
-      // 确保最终状态为已完成（如果进度回调没有正确设置）
-      setTasks(prev => prev.map(t => {
-        if (t.id !== taskId) return t;
-        // 只在状态不是 completed 时才更新
-        if (t.status === 'completed') return t;
-        return { ...t, status: 'completed' as const, progress: 100, abortController: undefined };
-      }));
+      // 下载函数执行完成后，检查是否有失败片段
+      const taskAfterDownload = tasksRef.current.find(t => t.id === taskId);
+      const hasFailedSegments = taskAfterDownload?.parsedTask?.finishList.some(
+        item => item.status === 'error'
+      );
+      
+      // 边下边存模式下，失败片段已被跳过并写入文件，无需等待重试
+      // 只有普通模式下有失败片段才需要保持 abortController 等待手动重试
+      if (hasFailedSegments && streamMode === 'disabled') {
+        // 普通模式：有失败片段，保持 abortController 以便后续可以区分状态
+        // eslint-disable-next-line no-console
+        console.log(`⚠️ 任务 ${taskId} 有失败片段，保持下载状态等待重试`);
+      } else {
+        // 边下边存模式或全部成功，清除 abortController
+        setTasks(prev => prev.map(t => 
+          t.id === taskId 
+            ? { ...t, abortController: undefined }
+            : t
+        ));
+        
+        if (hasFailedSegments && streamMode !== 'disabled') {
+          // eslint-disable-next-line no-console
+          console.log(`✅ 边下边存模式：任务 ${taskId} 已完成，失败片段已跳过`);
+        }
+      }
     } catch (error) {
       if (error instanceof Error && error.message === '下载已取消') {
         // 如果是页面卸载导致的取消，不更新状态
@@ -249,6 +279,7 @@ const DownloadManager = ({ isOpen, onClose }: DownloadManagerProps) => {
     startSegment: number;
     endSegment: number;
     streamMode: StreamSaverMode;
+    maxRetries: number;
     parsedTask: M3U8Task;
   }) => {
     const taskId = Date.now().toString();
@@ -270,6 +301,7 @@ const DownloadManager = ({ isOpen, onClose }: DownloadManagerProps) => {
         startSegment: config.startSegment,
         endSegment: config.endSegment,
         streamMode: config.streamMode,
+        maxRetries: config.maxRetries,
         parsedTask: config.parsedTask,
       },
       parsedTask: config.parsedTask, // 保存片段信息
@@ -290,7 +322,8 @@ const DownloadManager = ({ isOpen, onClose }: DownloadManagerProps) => {
         config.rangeMode,
         config.startSegment,
         config.endSegment,
-        config.streamMode
+        config.streamMode,
+        config.maxRetries || 3
       );
     }, 0);
   }, [executeDownload]);
@@ -318,6 +351,7 @@ const DownloadManager = ({ isOpen, onClose }: DownloadManagerProps) => {
           startSegment: config.startSegment,
           endSegment: config.endSegment,
           streamMode: config.streamMode,
+          maxRetries: config.maxRetries || 3,
           parsedTask: config.parsedTask,
         },
         parsedTask: config.parsedTask, // 保存片段信息
@@ -338,7 +372,8 @@ const DownloadManager = ({ isOpen, onClose }: DownloadManagerProps) => {
           config.rangeMode,
           config.startSegment,
           config.endSegment,
-          config.streamMode
+          config.streamMode,
+          config.maxRetries || 3
         );
       }, 0);
     };
@@ -361,7 +396,7 @@ const DownloadManager = ({ isOpen, onClose }: DownloadManagerProps) => {
     if (!taskToDownload?.config) return;
 
     const controller = new AbortController();
-    const { downloadType, concurrency, rangeMode, startSegment, endSegment, streamMode } = taskToDownload.config;
+    const { downloadType, concurrency, rangeMode, startSegment, endSegment, streamMode, maxRetries } = taskToDownload.config;
     
     // 更新任务状态
     setTasks(prev => prev.map(t => 
@@ -370,7 +405,7 @@ const DownloadManager = ({ isOpen, onClose }: DownloadManagerProps) => {
         : t
     ));
 
-    executeDownload(taskId, parsedTask, controller, downloadType, concurrency, rangeMode, startSegment, endSegment, streamMode || 'disabled');
+    executeDownload(taskId, parsedTask, controller, downloadType, concurrency, rangeMode, startSegment, endSegment, streamMode || 'disabled', maxRetries || 3);
   }, [executeDownload]);
 
   // 删除任务
@@ -401,13 +436,155 @@ const DownloadManager = ({ isOpen, onClose }: DownloadManagerProps) => {
 
   // 继续下载任务
   const resumeTask = useCallback(async (taskId: string) => {
+    // eslint-disable-next-line no-console
+    console.log(`🔄 resumeTask 被调用: taskId=${taskId}`);
+    
     // 使用 tasksRef 获取最新的 tasks
     const taskToResume = tasksRef.current.find(t => t.id === taskId);
-    if (!taskToResume || taskToResume.status === 'downloading') return;
+    if (!taskToResume) {
+      // eslint-disable-next-line no-console
+      console.log(`⚠️ 找不到任务: ${taskId}`);
+      return;
+    }
+    
+    // eslint-disable-next-line no-console
+    console.log(`📋 任务状态: ${taskToResume.status}, abortController: ${!!taskToResume.abortController}`);
+    
+    // 检查是否有失败片段
+    const hasFailedSegments = taskToResume.parsedTask?.finishList.some(
+      item => item.status === 'error'
+    );
+    
+    // 如果任务正在下载中（有 abortController）且还有失败片段，不重复开始
+    if (taskToResume.status === 'downloading' && taskToResume.abortController && hasFailedSegments) {
+      // eslint-disable-next-line no-console
+      console.log(`⚠️ 任务正在下载中且有失败片段，跳过`);
+      return;
+    }
 
-    // 如果有保存的解析任务配置，直接使用
-    if (taskToResume.config?.parsedTask) {
-      startTaskDownload(taskId, taskToResume.config.parsedTask);
+    // 使用 task.parsedTask 而不是 config.parsedTask，因为手动重试更新的是 task.parsedTask
+    const parsedTaskToUse = taskToResume.parsedTask || taskToResume.config?.parsedTask;
+    
+    if (parsedTaskToUse) {
+      const downloadedCount = parsedTaskToUse.downloadedSegments?.size || 0;
+      const isStreamMode = taskToResume.config?.streamMode !== 'disabled';
+      
+      // 检查是否还有需要下载的片段(空状态表示待下载)
+      const { startSegment, endSegment } = parsedTaskToUse.rangeDownload;
+      let pendingCount = 0;
+      let successCount = 0;
+      let errorCount = 0;
+      
+      for (let i = startSegment - 1; i < endSegment; i++) {
+        const status = parsedTaskToUse.finishList[i].status;
+        if (status === '' || status === 'downloading') pendingCount++;
+        else if (status === 'success') successCount++;
+        else if (status === 'error') errorCount++;
+      }
+      
+      const totalInRange = endSegment - startSegment + 1;
+      
+      // eslint-disable-next-line no-console
+      console.log(`✅ 使用已保存的 parsedTask，范围内片段: ${totalInRange}个，成功: ${successCount}，失败: ${errorCount}，待下载: ${pendingCount}，已保存数据: ${downloadedCount} 个, 边下边存: ${isStreamMode}`);
+      
+      // 如果范围内所有片段都已完成(没有pending)
+      if (pendingCount === 0) {
+        // 全部成功
+        if (errorCount === 0) {
+          // eslint-disable-next-line no-console
+          console.log(`🎉 范围内所有 ${totalInRange} 个片段都已成功下载`);
+          
+          // 边下边存模式：数据已直接写入文件，直接标记为完成
+          if (isStreamMode) {
+            // eslint-disable-next-line no-console
+            console.log(`✅ 边下边存模式，数据已写入文件，直接标记为完成`);
+            setTasks(prev => prev.map(t =>
+              t.id === taskId ? { ...t, status: 'completed' as const, progress: 100 } : t
+            ));
+            return;
+          }
+          
+          // 普通模式：需要合并片段数据
+          // eslint-disable-next-line no-console
+          console.log(`📦 普通模式，开始合并 ${downloadedCount} 个片段数据...`);
+          
+          // 先标记为合并中
+          setTasks(prev => prev.map(t =>
+            t.id === taskId ? { ...t, status: 'merging' as const, progress: 99 } : t
+          ));
+
+          // 异步合并和下载
+          setTimeout(async () => {
+            try {
+              // 从 downloadedSegments 按顺序获取片段数据
+              const segments: ArrayBuffer[] = [];
+              for (let i = startSegment - 1; i < endSegment; i++) {
+                const segment = parsedTaskToUse.downloadedSegments?.get(i);
+                if (segment) {
+                  segments.push(segment);
+                }
+              }
+              
+              if (segments.length === 0) {
+                throw new Error('没有可合并的片段数据');
+              }
+              
+              // eslint-disable-next-line no-console
+              console.log(`📦 合并 ${segments.length} 个片段...`);
+              
+              // 动态导入合并函数
+              const { mergeSegments, triggerDownload } = await import('@/lib/m3u8-downloader');
+              const { transmuxTSToMP4 } = await import('@/lib/mp4-transmuxer');
+              
+              // 如果是 MP4 格式，进行转码
+              const downloadType = taskToResume.config?.downloadType || 'TS';
+              let blob: Blob;
+              
+              if (downloadType === 'MP4') {
+                // 计算范围内的视频时长
+                const totalDuration = parsedTaskToUse.durationSecond || 0;
+                const totalSegmentsCount = parsedTaskToUse.finishList.length;
+                const rangeDuration = (totalInRange / totalSegmentsCount) * totalDuration;
+                
+                // eslint-disable-next-line no-console
+                console.log(`🎬 转码为 MP4 格式...`);
+                blob = transmuxTSToMP4(segments, rangeDuration);
+              } else {
+                blob = mergeSegments(segments, downloadType);
+              }
+              
+              // 触发下载
+              triggerDownload(blob, parsedTaskToUse.title, downloadType);
+              
+              // 标记为完成
+              setTasks(prev => prev.map(t =>
+                t.id === taskId ? { ...t, status: 'completed' as const, progress: 100 } : t
+              ));
+              
+              // eslint-disable-next-line no-console
+              console.log(`✅ 合并下载完成！`);
+            } catch (error) {
+              // eslint-disable-next-line no-console
+              console.error('合并下载失败:', error);
+              setTasks(prev => prev.map(t =>
+                t.id === taskId ? { ...t, status: 'error' as const } : t
+              ));
+            }
+          }, 100);
+          
+          return;
+        } else {
+          // 有失败片段，不启动下载，等待手动重试
+          // eslint-disable-next-line no-console
+          console.log(`⚠️ 范围内有 ${errorCount} 个片段失败，等待手动重试`);
+          return;
+        }
+      }
+      
+      // 还有片段未下载完成，继续下载
+      // eslint-disable-next-line no-console
+      console.log(`▶️ 还有 ${pendingCount} 个片段待下载，继续下载...`);
+      startTaskDownload(taskId, parsedTaskToUse);
       return;
     }
 
@@ -569,10 +746,60 @@ const DownloadManager = ({ isOpen, onClose }: DownloadManagerProps) => {
                               范围: {task.config.startSegment}-{task.config.endSegment}
                             </span>
                           )}
+                          {task.parsedTask && task.parsedTask.errorNum > 0 && (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400">
+                              失败: {task.parsedTask.errorNum} 个片段
+                            </span>
+                          )}
                         </div>
                       )}
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0">
+                      {/* 立即合并下载按钮，仅普通模式显示 */}
+                      {task.config?.streamMode === 'disabled' && task.parsedTask && (
+                        <button
+                          onClick={async () => {
+                            // 防止重复触发
+                            if (mergingTaskIds.current.has(task.id)) return;
+                            mergingTaskIds.current.add(task.id);
+                            try {
+                              const { mergeSegments, triggerDownload } = await import('@/lib/m3u8-downloader');
+                              const { transmuxTSToMP4 } = await import('@/lib/mp4-transmuxer');
+                              // 由于按钮渲染已做保护，这里加非空断言
+                              const { startSegment, endSegment } = task.parsedTask!.rangeDownload;
+                              const downloadType = task.config?.downloadType || 'TS';
+                              // 按顺序收集已下载片段
+                              const segments: ArrayBuffer[] = [];
+                              for (let i = startSegment - 1; i < endSegment; i++) {
+                                const segment = task.parsedTask!.downloadedSegments?.get(i);
+                                if (segment) segments.push(segment);
+                              }
+                              if (segments.length === 0) {
+                                alert('没有可合并的片段数据！');
+                                return;
+                              }
+                              let blob: Blob;
+                              if (downloadType === 'MP4') {
+                                const totalDuration = task.parsedTask!.durationSecond || 0;
+                                const totalSegments = endSegment - startSegment + 1;
+                                const rangeDuration = (totalDuration / totalSegments) * segments.length;
+                                blob = transmuxTSToMP4(segments, rangeDuration);
+                              } else {
+                                blob = mergeSegments(segments, downloadType);
+                              }
+                              triggerDownload(blob, task.parsedTask!.title, downloadType);
+                            } catch (e) {
+                              alert('合并下载失败：' + (e instanceof Error ? e.message : e));
+                            } finally {
+                              setTimeout(() => mergingTaskIds.current.delete(task.id), 2000);
+                            }
+                          }}
+                          className="p-2 hover:bg-green-100 dark:hover:bg-green-900/30 text-green-600 dark:text-green-400 rounded-lg transition-colors"
+                          title="立即合并已下载片段并导出文件"
+                        >
+                          <Download className="h-4 w-4" />
+                        </button>
+                      )}
                       {/* 查看片段按钮 */}
                       {task.parsedTask && (
                         <button
@@ -615,6 +842,7 @@ const DownloadManager = ({ isOpen, onClose }: DownloadManagerProps) => {
                     <div className="flex items-center justify-between text-sm">
                       <span className="text-gray-700 dark:text-gray-300">
                         {task.status === 'completed' ? '已完成' : 
+                         task.status === 'merging' ? '合并中' :
                          task.status === 'downloading' ? '下载中' :
                          task.status === 'error' ? '下载失败' :
                          task.status === 'paused' ? '已暂停' : '等待中'}
@@ -662,12 +890,69 @@ const DownloadManager = ({ isOpen, onClose }: DownloadManagerProps) => {
           task={task.parsedTask}
           isOpen={true}
           onClose={() => setViewingSegmentsTaskId(null)}
-          onSegmentRetry={(index) => {
+          taskExists={() => tasks.some(t => t.id === viewingSegmentsTaskId)}
+          concurrency={task.config?.concurrency || 6}
+          streamMode={task.config?.streamMode || 'disabled'}
+          onSegmentRetry={(_index) => {
             // 重试成功后更新任务进度
             setTasks(prev => prev.map(t => {
               if (t.id === viewingSegmentsTaskId && t.parsedTask) {
-                const successCount = t.parsedTask.finishList.filter(item => item.status === 'success').length;
-                const progress = (successCount / t.parsedTask.finishList.length) * 100;
+                const { startSegment, endSegment } = t.parsedTask.rangeDownload;
+                
+                // 只检查下载范围内的片段状态
+                let successCount = 0;
+                let errorCount = 0;
+                for (let i = startSegment - 1; i < endSegment; i++) {
+                  if (t.parsedTask.finishList[i].status === 'success') {
+                    successCount++;
+                  } else if (t.parsedTask.finishList[i].status === 'error') {
+                    errorCount++;
+                  }
+                }
+                
+                const totalInRange = endSegment - startSegment + 1;
+                const progress = (successCount / totalInRange) * 100;
+                
+                // 检查范围内是否所有片段都成功了
+                if (errorCount === 0 && successCount === totalInRange) {
+                  // 防止重复触发
+                  if (mergingTaskIds.current.has(viewingSegmentsTaskId)) {
+                    // eslint-disable-next-line no-console
+                    console.log(`⚠️ 任务 ${viewingSegmentsTaskId} 已经在合并中，跳过`);
+                    return t;
+                  }
+                  
+                  mergingTaskIds.current.add(viewingSegmentsTaskId);
+                  
+                  // 所有片段都成功，自动触发合并保存
+                  // parsedTask.downloadedSegments 已经在 SegmentViewer 中更新了
+                  // eslint-disable-next-line no-console
+                  console.log(`✅ 范围内所有 ${totalInRange} 个片段重试成功！downloadedSegments 有 ${t.parsedTask.downloadedSegments?.size || 0} 个片段，自动触发合并保存...`);
+                  
+                  // 保存 taskId（闭包中的值）
+                  const taskIdToResume = viewingSegmentsTaskId;
+                  
+                  // 先关闭片段查看器
+                  setViewingSegmentsTaskId(null);
+                  
+                  // 清除 abortController，允许 resumeTask 触发合并
+                  setTasks(prevTasks => prevTasks.map(task => 
+                    task.id === taskIdToResume 
+                      ? { ...task, abortController: undefined }
+                      : task
+                  ));
+                  
+                  // 然后触发合并保存
+                  setTimeout(() => {
+                    resumeTask(taskIdToResume);
+                    // 3秒后清除标记，允许下次触发
+                    setTimeout(() => {
+                      mergingTaskIds.current.delete(taskIdToResume);
+                    }, 3000);
+                  }, 500);
+                }
+                
+                // 注意：这里返回的是浅拷贝，parsedTask 引用不变，所以 downloadedSegments 的修改会保留
                 return {
                   ...t,
                   current: successCount,
