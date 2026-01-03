@@ -605,6 +605,12 @@ function PlayPageClient() {
   // Wake Lock 相关函数
   const requestWakeLock = async () => {
     try {
+      // 检查页面是否可见
+      if (document.hidden) {
+        console.log('页面不可见，跳过 Wake Lock 请求');
+        return;
+      }
+      
       if ('wakeLock' in navigator) {
         wakeLockRef.current = await (navigator as any).wakeLock.request(
           'screen'
@@ -2087,6 +2093,19 @@ function PlayPageClient() {
 
   // 当组件卸载时清理定时器、Wake Lock 和播放器资源
   useEffect(() => {
+    // 监听页面可见性变化
+    const handleVisibilityChange = () => {
+      if (!document.hidden && artPlayerRef.current && !artPlayerRef.current.paused) {
+        // 页面变为可见且视频正在播放时，重新请求 Wake Lock
+        requestWakeLock();
+      } else if (document.hidden) {
+        // 页面隐藏时，释放 Wake Lock（系统会自动释放，但我们也主动释放）
+        releaseWakeLock();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
     return () => {
       // 清理定时器
       if (saveIntervalRef.current) {
@@ -2095,6 +2114,9 @@ function PlayPageClient() {
 
       // 释放 Wake Lock
       releaseWakeLock();
+
+      // 移除可见性监听
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
 
       // 销毁播放器实例
       cleanupPlayer();

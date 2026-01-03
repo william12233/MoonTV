@@ -3,7 +3,7 @@
 import { Loader2, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
-import { M3U8Task, parseM3U8 } from '@/lib/m3u8-downloader';
+import { M3U8Task, parseM3U8, StreamSaverMode } from '@/lib/m3u8-downloader';
 
 interface AddDownloadModalProps {
   isOpen: boolean;
@@ -16,7 +16,7 @@ interface AddDownloadModalProps {
     rangeMode: boolean;
     startSegment: number;
     endSegment: number;
-    useStreamSaver: boolean;
+    streamMode: StreamSaverMode;
     parsedTask: M3U8Task;
   }) => void;
   initialUrl?: string;
@@ -50,21 +50,50 @@ const AddDownloadModal = ({ isOpen, onClose, onAddTask, initialUrl = '', initial
   const [startSegment, setStartSegment] = useState(1);
   const [endSegment, setEndSegment] = useState(0);
   const [concurrency, setConcurrency] = useState(6);
-  const [useStreamSaver, setUseStreamSaver] = useState(false);
+  const [streamMode, setStreamMode] = useState<StreamSaverMode>('disabled');
   const [editableUrl, setEditableUrl] = useState('');
   const [editableTitle, setEditableTitle] = useState('');
   const [syncWithSkipConfig, setSyncWithSkipConfig] = useState(false);
+  
+  // 检测各种模式的支持情况
+  const [modeSupport, setModeSupport] = useState({
+    serviceWorker: false,
+    fileSystem: false,
+    blob: true, // Blob模式总是支持的
+  });
+
+  // 检测边下边存模式的支持情况
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      // 动态导入，避免服务端渲染时执行
+      Promise.all([
+        import('@/lib/stream-saver-fallback'),
+        import('@/lib/stream-saver')
+      ]).then(([fallback, streamSaver]) => {
+        const fileSystemSupported = fallback.supportsFileSystemAccess();
+        const serviceWorkerSupported = streamSaver.isStreamSaverSupported();
+        
+        setModeSupport({
+          serviceWorker: serviceWorkerSupported,
+          fileSystem: fileSystemSupported,
+          blob: true,
+        });
+      }).catch(err => {
+        console.error('Failed to detect stream saver support:', err);
+      });
+    }
+  }, []);
 
   // 从 localStorage 恢复用户配置
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const savedDownloadType = localStorage.getItem('downloadType') as 'TS' | 'MP4' | null;
       const savedConcurrency = localStorage.getItem('concurrency');
-      const savedUseStreamSaver = localStorage.getItem('useStreamSaver');
+      const savedStreamMode = localStorage.getItem('streamMode') as StreamSaverMode | null;
       
       if (savedDownloadType) setDownloadType(savedDownloadType);
       if (savedConcurrency) setConcurrency(parseInt(savedConcurrency, 10));
-      if (savedUseStreamSaver) setUseStreamSaver(savedUseStreamSaver === 'true');
+      if (savedStreamMode) setStreamMode(savedStreamMode);
     }
   }, []);
 
@@ -73,9 +102,9 @@ const AddDownloadModal = ({ isOpen, onClose, onAddTask, initialUrl = '', initial
     if (typeof window !== 'undefined') {
       localStorage.setItem('downloadType', downloadType);
       localStorage.setItem('concurrency', concurrency.toString());
-      localStorage.setItem('useStreamSaver', useStreamSaver.toString());
+      localStorage.setItem('streamMode', streamMode);
     }
-  }, [downloadType, concurrency, useStreamSaver]);
+  }, [downloadType, concurrency, streamMode]);
 
   // 当模态框打开时，设置初始值
   useEffect(() => {
@@ -163,7 +192,7 @@ const AddDownloadModal = ({ isOpen, onClose, onAddTask, initialUrl = '', initial
       rangeMode,
       startSegment,
       endSegment,
-      useStreamSaver,
+      streamMode,
       parsedTask: task,
     });
 
@@ -284,19 +313,96 @@ const AddDownloadModal = ({ isOpen, onClose, onAddTask, initialUrl = '', initial
             </div>
           </div>
 
-          {/* 边下边存 */}
+          {/* 边下边存模式 */}
           <div>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={useStreamSaver}
-                onChange={(e) => setUseStreamSaver(e.target.checked)}
-                className="w-4 h-4"
-              />
-              <span className="text-sm text-gray-700 dark:text-gray-300">
-                边下边存 (适合大文件，避免内存溢出)
-              </span>
+            <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+              下载模式
             </label>
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="streamMode"
+                  value="disabled"
+                  checked={streamMode === 'disabled'}
+                  onChange={() => setStreamMode('disabled')}
+                  className="w-4 h-4"
+                />
+                <div className="text-sm flex-1">
+                  <div className="flex items-center gap-1">
+                    <span className="text-green-500">✓</span>
+                    <span className="text-gray-700 dark:text-gray-300 font-medium">
+                      普通模式
+                    </span>
+                  </div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400 ml-4">
+                    内存下载，适合小文件（&lt;500MB）
+                  </div>
+                </div>
+              </label>
+              
+              <label className={`flex items-center gap-2 ${!modeSupport.serviceWorker ? 'opacity-60' : 'cursor-pointer'}`}>
+                <input
+                  type="radio"
+                  name="streamMode"
+                  value="service-worker"
+                  checked={streamMode === 'service-worker'}
+                  onChange={() => setStreamMode('service-worker')}
+                  disabled={!modeSupport.serviceWorker}
+                  className="w-4 h-4 disabled:cursor-not-allowed"
+                />
+                <div className="text-sm flex-1">
+                  <div className="flex items-center gap-1">
+                    {modeSupport.serviceWorker ? (
+                      <span className="text-green-500">✓</span>
+                    ) : (
+                      <span className="text-red-500">✗</span>
+                    )}
+                    <span className={`font-medium ${!modeSupport.serviceWorker ? 'text-gray-400 dark:text-gray-500' : 'text-gray-700 dark:text-gray-300'}`}>
+                      Service Worker 流式下载
+                    </span>
+                  </div>
+                  <div className={`text-xs ml-4 ${!modeSupport.serviceWorker ? 'text-gray-400 dark:text-gray-500' : 'text-gray-500 dark:text-gray-400'}`}>
+                    {modeSupport.serviceWorker ? (
+                      '边下边存，无大小限制，适合超大文件'
+                    ) : (
+                      '不支持：需要HTTPS或本地环境'
+                    )}
+                  </div>
+                </div>
+              </label>
+              
+              <label className={`flex items-center gap-2 ${!modeSupport.fileSystem ? 'opacity-60' : 'cursor-pointer'}`}>
+                <input
+                  type="radio"
+                  name="streamMode"
+                  value="file-system"
+                  checked={streamMode === 'file-system'}
+                  onChange={() => setStreamMode('file-system')}
+                  disabled={!modeSupport.fileSystem}
+                  className="w-4 h-4 disabled:cursor-not-allowed"
+                />
+                <div className="text-sm flex-1">
+                  <div className="flex items-center gap-1">
+                    {modeSupport.fileSystem ? (
+                      <span className="text-green-500">✓</span>
+                    ) : (
+                      <span className="text-red-500">✗</span>
+                    )}
+                    <span className={`font-medium ${!modeSupport.fileSystem ? 'text-gray-400 dark:text-gray-500' : 'text-gray-700 dark:text-gray-300'}`}>
+                      文件系统直写
+                    </span>
+                  </div>
+                  <div className={`text-xs ml-4 ${!modeSupport.fileSystem ? 'text-gray-400 dark:text-gray-500' : 'text-gray-500 dark:text-gray-400'}`}>
+                    {modeSupport.fileSystem ? (
+                      '直接写入磁盘，无大小限制（推荐）'
+                    ) : (
+                      '不支持：需要Chrome/Edge浏览器'
+                    )}
+                  </div>
+                </div>
+              </label>
+            </div>
           </div>
 
           {/* 解析信息 */}

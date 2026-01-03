@@ -1,11 +1,12 @@
 'use client';
 
-import { Download, Pause, Play, Trash2, X } from 'lucide-react';
+import { Download, List,Pause, Play, Trash2, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { downloadM3U8Video, DownloadProgress, M3U8Task, parseM3U8 } from '@/lib/m3u8-downloader';
+import { downloadM3U8Video, DownloadProgress, M3U8Task, parseM3U8, StreamSaverMode } from '@/lib/m3u8-downloader';
 
 import AddDownloadModal from './AddDownloadModal';
+import SegmentViewer from './SegmentViewer';
 
 interface DownloadTask {
   id: string;
@@ -24,9 +25,11 @@ interface DownloadTask {
     rangeMode: boolean;
     startSegment: number;
     endSegment: number;
-    useStreamSaver?: boolean;
+    streamMode?: StreamSaverMode;
     parsedTask?: M3U8Task;
   };
+  // 片段信息（用于查看和重试）
+  parsedTask?: M3U8Task;
 }
 
 interface DownloadManagerProps {
@@ -39,6 +42,8 @@ const DownloadManager = ({ isOpen, onClose }: DownloadManagerProps) => {
   const [tasks, setTasks] = useState<DownloadTask[]>([]);
   // 添加下载弹窗状态
   const [showAddModal, setShowAddModal] = useState(false);
+  // 查看片段的任务ID
+  const [viewingSegmentsTaskId, setViewingSegmentsTaskId] = useState<string | null>(null);
   // 使用 ref 保存最新的 tasks，用于事件处理器
   const tasksRef = useRef<DownloadTask[]>([]);
   // 追踪是否已经处理过自动恢复
@@ -115,7 +120,7 @@ const DownloadManager = ({ isOpen, onClose }: DownloadManagerProps) => {
           rangeMode: config.rangeMode,
           startSegment: config.startSegment,
           endSegment: config.endSegment,
-          useStreamSaver: config.useStreamSaver,
+          streamMode: config.streamMode,
         } : undefined,
         // 保存原始状态，用于恢复时判断
         _originalStatus: rest.status,
@@ -160,14 +165,15 @@ const DownloadManager = ({ isOpen, onClose }: DownloadManagerProps) => {
     rangeMode: boolean,
     startSegment: number,
     endSegment: number,
-    useStreamSaver = false
+    streamMode: StreamSaverMode = 'disabled'
   ) => {
     try {
-      const downloadTask = { ...parsedTask };
-      downloadTask.type = downloadType;
+      // 不要创建新对象，直接使用传入的 parsedTask
+      // 只修改需要的属性
+      parsedTask.type = downloadType;
       
       if (rangeMode) {
-        downloadTask.rangeDownload = {
+        parsedTask.rangeDownload = {
           startSegment: Math.max(1, Math.min(startSegment, parsedTask.tsUrlList.length)),
           endSegment: Math.max(1, Math.min(endSegment, parsedTask.tsUrlList.length)),
           targetSegment: Math.abs(endSegment - startSegment) + 1,
@@ -175,23 +181,33 @@ const DownloadManager = ({ isOpen, onClose }: DownloadManagerProps) => {
       }
 
       await downloadM3U8Video(
-        downloadTask,
+        parsedTask,
         (prog: DownloadProgress) => {
           setTasks(prev => prev.map(t => {
             if (t.id !== taskId) return t;
+            
+            // 创建新的 parsedTask 引用以触发重新渲染
+            const updatedParsedTask = t.parsedTask ? {
+              ...t.parsedTask,
+              finishNum: parsedTask.finishNum,
+              errorNum: parsedTask.errorNum,
+              // 深拷贝 finishList 数组及其元素
+              finishList: parsedTask.finishList.map(item => ({ ...item })),
+            } : undefined;
             
             return { 
               ...t, 
               progress: prog.percentage,
               current: prog.current,
               total: prog.total,
-              status: prog.status === 'done' ? 'completed' : 'downloading'
+              status: prog.status === 'done' ? 'completed' : 'downloading',
+              parsedTask: updatedParsedTask,
             };
           }));
         },
         controller.signal,
         concurrency,
-        useStreamSaver
+        streamMode
       );
       
       // 确保最终状态为已完成（如果进度回调没有正确设置）
@@ -232,7 +248,7 @@ const DownloadManager = ({ isOpen, onClose }: DownloadManagerProps) => {
     rangeMode: boolean;
     startSegment: number;
     endSegment: number;
-    useStreamSaver: boolean;
+    streamMode: StreamSaverMode;
     parsedTask: M3U8Task;
   }) => {
     const taskId = Date.now().toString();
@@ -253,27 +269,30 @@ const DownloadManager = ({ isOpen, onClose }: DownloadManagerProps) => {
         rangeMode: config.rangeMode,
         startSegment: config.startSegment,
         endSegment: config.endSegment,
-        useStreamSaver: config.useStreamSaver,
+        streamMode: config.streamMode,
         parsedTask: config.parsedTask,
       },
+      parsedTask: config.parsedTask, // 保存片段信息
       abortController: controller,
     };
 
     // 添加到任务列表
     setTasks(prev => [...prev, newTask]);
 
-    // 立即开始下载
-    executeDownload(
-      taskId,
-      config.parsedTask,
-      controller,
-      config.downloadType,
-      config.concurrency,
-      config.rangeMode,
-      config.startSegment,
-      config.endSegment,
-      config.useStreamSaver
-    );
+    // 使用 setTimeout 确保 state 更新后再开始下载
+    setTimeout(() => {
+      executeDownload(
+        taskId,
+        config.parsedTask,
+        controller,
+        config.downloadType,
+        config.concurrency,
+        config.rangeMode,
+        config.startSegment,
+        config.endSegment,
+        config.streamMode
+      );
+    }, 0);
   }, [executeDownload]);
 
   // 监听来自播放页面的添加下载任务事件
@@ -298,27 +317,30 @@ const DownloadManager = ({ isOpen, onClose }: DownloadManagerProps) => {
           rangeMode: config.rangeMode,
           startSegment: config.startSegment,
           endSegment: config.endSegment,
-          useStreamSaver: config.useStreamSaver,
+          streamMode: config.streamMode,
           parsedTask: config.parsedTask,
         },
+        parsedTask: config.parsedTask, // 保存片段信息
         abortController: controller,
       };
 
       // 添加到任务列表
       setTasks(prev => [...prev, newTask]);
 
-      // 立即开始下载
-      executeDownload(
-        taskId,
-        config.parsedTask,
-        controller,
-        config.downloadType,
-        config.concurrency,
-        config.rangeMode,
-        config.startSegment,
-        config.endSegment,
-        config.useStreamSaver
-      );
+      // 使用 setTimeout 确保 state 更新后再开始下载
+      setTimeout(() => {
+        executeDownload(
+          taskId,
+          config.parsedTask,
+          controller,
+          config.downloadType,
+          config.concurrency,
+          config.rangeMode,
+          config.startSegment,
+          config.endSegment,
+          config.streamMode
+        );
+      }, 0);
     };
 
     if (typeof window !== 'undefined') {
@@ -339,7 +361,7 @@ const DownloadManager = ({ isOpen, onClose }: DownloadManagerProps) => {
     if (!taskToDownload?.config) return;
 
     const controller = new AbortController();
-    const { downloadType, concurrency, rangeMode, startSegment, endSegment, useStreamSaver } = taskToDownload.config;
+    const { downloadType, concurrency, rangeMode, startSegment, endSegment, streamMode } = taskToDownload.config;
     
     // 更新任务状态
     setTasks(prev => prev.map(t => 
@@ -348,7 +370,7 @@ const DownloadManager = ({ isOpen, onClose }: DownloadManagerProps) => {
         : t
     ));
 
-    executeDownload(taskId, parsedTask, controller, downloadType, concurrency, rangeMode, startSegment, endSegment, useStreamSaver || false);
+    executeDownload(taskId, parsedTask, controller, downloadType, concurrency, rangeMode, startSegment, endSegment, streamMode || 'disabled');
   }, [executeDownload]);
 
   // 删除任务
@@ -405,7 +427,7 @@ const DownloadManager = ({ isOpen, onClose }: DownloadManagerProps) => {
                 rangeMode: t.config?.rangeMode || false,
                 startSegment: t.config?.startSegment || 1,
                 endSegment: t.config?.endSegment || parsedTask.tsUrlList.length,
-                useStreamSaver: t.config?.useStreamSaver || false,
+                streamMode: t.config?.streamMode || 'disabled',
                 parsedTask,
               }
             }
@@ -551,6 +573,16 @@ const DownloadManager = ({ isOpen, onClose }: DownloadManagerProps) => {
                       )}
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0">
+                      {/* 查看片段按钮 */}
+                      {task.parsedTask && (
+                        <button
+                          onClick={() => setViewingSegmentsTaskId(task.id)}
+                          className="p-2 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors"
+                          title="查看片段"
+                        >
+                          <List className="h-4 w-4" />
+                        </button>
+                      )}
                       {task.status === 'downloading' ? (
                         <button
                           onClick={() => pauseTask(task.id)}
@@ -621,6 +653,33 @@ const DownloadManager = ({ isOpen, onClose }: DownloadManagerProps) => {
       initialUrl=""
       initialTitle=""
     />
+
+    {/* 片段查看器 */}
+    {viewingSegmentsTaskId && (() => {
+      const task = tasks.find(t => t.id === viewingSegmentsTaskId);
+      return task?.parsedTask ? (
+        <SegmentViewer
+          task={task.parsedTask}
+          isOpen={true}
+          onClose={() => setViewingSegmentsTaskId(null)}
+          onSegmentRetry={(index) => {
+            // 重试成功后更新任务进度
+            setTasks(prev => prev.map(t => {
+              if (t.id === viewingSegmentsTaskId && t.parsedTask) {
+                const successCount = t.parsedTask.finishList.filter(item => item.status === 'success').length;
+                const progress = (successCount / t.parsedTask.finishList.length) * 100;
+                return {
+                  ...t,
+                  current: successCount,
+                  progress,
+                };
+              }
+              return t;
+            }));
+          }}
+        />
+      ) : null;
+    })()}
     </>
   );
 };
