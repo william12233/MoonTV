@@ -142,6 +142,8 @@ export class StreamingTransmuxer {
   private segmentCount = 0;
   private isFirstSegment = true;
   private duration: number;
+  private writeError: Error | null = null; // 跟踪写入错误
+  private pendingWrites: Promise<void>[] = []; // 跟踪待完成的写入操作
 
   constructor(writer?: WritableStreamDefaultWriter<Uint8Array>, duration?: number) {
     this.writer = writer || null;
@@ -153,6 +155,11 @@ export class StreamingTransmuxer {
 
     // 监听数据事件 - 直接写入流
     this.transmuxer.on('data', async (segment: any) => {
+      // 如果已经有写入错误，不再处理新的数据
+      if (this.writeError) {
+        return;
+      }
+
       try {
         // 对于第一个片段，需要写入初始化段
         if (this.isFirstSegment && segment.initSegment) {
@@ -171,6 +178,7 @@ export class StreamingTransmuxer {
       } catch (error) {
         // eslint-disable-next-line no-console
         console.error('写入 MP4 数据失败:', error);
+        this.writeError = error instanceof Error ? error : new Error(String(error));
         throw error;
       }
     });
@@ -187,8 +195,22 @@ export class StreamingTransmuxer {
    * 推送 TS 数据并立即转码
    */
   async pushAndTransmux(tsData: Uint8Array): Promise<void> {
+    // 如果已经有写入错误，立即抛出
+    if (this.writeError) {
+      throw this.writeError;
+    }
+
     this.transmuxer.push(tsData);
     this.transmuxer.flush();
+    
+    // 等待一小段时间，让 data 事件有机会执行并捕获错误
+    // 注意：这是一个折中方案，因为 muxjs 的 data 事件是异步的
+    await new Promise(resolve => setTimeout(resolve, 0));
+    
+    // 再次检查是否有写入错误
+    if (this.writeError) {
+      throw this.writeError;
+    }
   }
 
   /**
