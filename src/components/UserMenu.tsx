@@ -53,6 +53,17 @@ export const UserMenu: React.FC = () => {
   const [isDoubanImageProxyDropdownOpen, setIsDoubanImageProxyDropdownOpen] = useState(false);
 
   const [autoDanmakuEnabled, setAutoDanmakuEnabled] = useState(false);
+  // 自动弹幕尝试次数设置，-1为无限尝试
+  const [danmakuRetryCount, setDanmakuRetryCount] = useState<number>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('danmakuRetryCount');
+      if (saved !== null) {
+        const parsed = parseInt(saved, 10);
+        if (!isNaN(parsed)) return parsed;
+      }
+    }
+    return 3; // 默认重试3次
+  });
   const [enablePreferBestSource, setEnablePreferBestSource] = useState(false);
   const [preferredDanmakuPlatform, setPreferredDanmakuPlatform] = useState("bilibili1");
   const [isDanmakuPlatformDropdownOpen, setIsDanmakuPlatformDropdownOpen] = useState(false);
@@ -210,9 +221,16 @@ export const UserMenu: React.FC = () => {
         setDoubanImageProxyUrl(defaultDoubanImageProxyUrl);
       }
 
+
       const savedAutoDanmakuEnabled = localStorage.getItem('autoDanmakuEnabled');
       if (savedAutoDanmakuEnabled !== null) {
         setAutoDanmakuEnabled(JSON.parse(savedAutoDanmakuEnabled));
+      }
+
+      const savedDanmakuRetryCount = localStorage.getItem('danmakuRetryCount');
+      if (savedDanmakuRetryCount !== null) {
+        const parsed = parseInt(savedDanmakuRetryCount, 10);
+        if (!isNaN(parsed)) setDanmakuRetryCount(parsed);
       }
 
       const savedEnablePreferBestSource = localStorage.getItem('enablePreferBestSource');
@@ -378,9 +396,17 @@ export const UserMenu: React.FC = () => {
   };
 
   // 设置相关的处理函数
+
   const handleAutoDanmakuToggle = (value: boolean) => {
     setAutoDanmakuEnabled(value);
     localStorage.setItem('autoDanmakuEnabled', JSON.stringify(value));
+  };
+
+  const handleDanmakuRetryCountChange = (value: number) => {
+    // 只允许-1或非负整数
+    if (value < -1) return;
+    setDanmakuRetryCount(value);
+    localStorage.setItem('danmakuRetryCount', value.toString());
   };
 
   const handlePreferBestSourceToggle = (value: boolean) => {
@@ -977,6 +1003,7 @@ export const UserMenu: React.FC = () => {
             </label>
           </div>
 
+
           {/* 自动匹配弹幕 */}
           <div className='flex items-center justify-between'>
             <div>
@@ -999,6 +1026,24 @@ export const UserMenu: React.FC = () => {
                 <div className='absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform peer-checked:translate-x-5'></div>
               </div>
             </label>
+          </div>
+          {/* 弹幕自动尝试次数设置 */}
+          <div className='flex items-center justify-between mt-2'>
+            <div>
+              <h4 className='text-xs font-medium text-gray-700 dark:text-gray-300'>
+                弹幕自动尝试次数
+              </h4>
+              <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
+                自动弹幕获取的尝试次数，-1为一直获取直到成功
+              </p>
+            </div>
+            <input
+              type='number'
+              min='-1'
+              className='w-11 px-2 py-1 rounded text-sm bg-[#f5f5f5] dark:bg-gray-800 text-gray-900 dark:text-gray-100 outline-none border-none focus:outline-none focus:border-none focus:ring-0'
+              value={danmakuRetryCount}
+              onChange={e => handleDanmakuRetryCountChange(Number(e.target.value))}
+            />
           </div>
 
           {/* 优选弹幕平台 */}

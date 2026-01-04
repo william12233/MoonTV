@@ -1027,71 +1027,84 @@ function PlayPageClient() {
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
 
-    (async () => {
+    // 获取尝试次数设置
+    let retryCount = 3;
+    try {
+      const saved = localStorage.getItem('danmakuRetryCount');
+      if (saved !== null) {
+        const parsed = parseInt(saved, 10);
+        if (!isNaN(parsed)) retryCount = parsed;
+      }
+    } catch {
+      // ignore
+    }
+
+    let attempt = 0;
+    let success = false;
+
+    const fetchDanmaku = async () => {
       setIsDanmakuLoading(true);
-      try {
-        const title = videoTitleRef.current;
-
-        const currentEpisodeTitle = detail?.episodes_titles?.[currentEpisodeIndex];
-
-        if (!currentEpisodeTitle) {
-          throw new Error("无法获取当前集数标题（episodes_titles 无效）");
-        }
-    
-        // 从当前集数标题中提取集数
-        let epNum = extractEpisodeNumber(currentEpisodeTitle);
-        if (!epNum) {
-          epNum = currentEpisodeIndex + 1;
-        }
-
-        const platform = preferredDanmakuPlatform;
-
-        const season = extractSeasonFromTitle(title);
-        const fileName = `${title} S${season}E${epNum} @${platform}`;
-
-        const matches = await matchAnime(fileName, abortController.signal);
-        console.log("初始化自动匹配:", matches);
-
-        // 如果请求已被取消，则忽略结果
-        if (abortController.signal.aborted) return;
-
-        if (matches.length > 0) {
-          const m = matches[0];
-
-          const animeOption = {
-            animeId: m.animeId,
-            animeTitle: m.animeTitle,
-            type: m.type,
-            typeDescription: m.typeDescription,
-            episodeCount: 1,
-            episodes: [
-              {
-                episodeId: m.episodeId,
-                episodeTitle: m.episodeTitle,
-              },
-            ],
-          };
-
-          setSelectedDanmakuAnime(animeOption);
-          setSelectedDanmakuSource(platform);
-
-        } else {
-          triggerGlobalError("自动加载弹幕失败，请手动选择弹幕源");
-        }
-      } catch (err) {
-        // 如果是取消错误，不显示错误
-        if (err instanceof DOMException && err.name === 'AbortError') {
-          console.log('自动加载弹幕已取消');
-          return;
-        }
-        console.error("初始化自动加载弹幕失败:", err);
-        triggerGlobalError("自动加载弹幕失败，请手动选择弹幕源");
-      } finally {
-        if (!abortController.signal.aborted) {
-          setIsDanmakuLoading(false);
+      while (!success && (retryCount === -1 || attempt <= retryCount)) {
+        attempt++;
+        try {
+          const title = videoTitleRef.current;
+          const currentEpisodeTitle = detail?.episodes_titles?.[currentEpisodeIndex];
+          if (!currentEpisodeTitle) {
+            throw new Error("无法获取当前集数标题（episodes_titles 无效）");
+          }
+          let epNum = extractEpisodeNumber(currentEpisodeTitle);
+          if (!epNum) {
+            epNum = currentEpisodeIndex + 1;
+          }
+          const platform = preferredDanmakuPlatform;
+          const season = extractSeasonFromTitle(title);
+          const fileName = `${title} S${season}E${epNum} @${platform}`;
+          const matches = await matchAnime(fileName, abortController.signal);
+          console.log(`自动弹幕匹配尝试第${attempt}次:`, matches);
+          if (abortController.signal.aborted) return;
+          if (matches.length > 0) {
+            const m = matches[0];
+            const animeOption = {
+              animeId: m.animeId,
+              animeTitle: m.animeTitle,
+              type: m.type,
+              typeDescription: m.typeDescription,
+              episodeCount: 1,
+              episodes: [
+                {
+                  episodeId: m.episodeId,
+                  episodeTitle: m.episodeTitle,
+                },
+              ],
+            };
+            setSelectedDanmakuAnime(animeOption);
+            setSelectedDanmakuSource(platform);
+            success = true;
+            break;
+          } else {
+            if (retryCount === -1 || attempt <= retryCount) {
+              await new Promise(res => setTimeout(res, 1500)); // 间隔1.5秒重试
+            }
+          }
+        } catch (err) {
+          if (err instanceof DOMException && err.name === 'AbortError') {
+            console.log('自动加载弹幕已取消');
+            return;
+          }
+          console.error(`自动弹幕匹配第${attempt}次失败:`, err);
+          if (retryCount === -1 || attempt <= retryCount) {
+            await new Promise(res => setTimeout(res, 1500));
+          }
         }
       }
-    })();
+      if (!success) {
+        triggerGlobalError("自动加载弹幕失败，请手动选择弹幕源");
+      }
+      if (!abortController.signal.aborted) {
+        setIsDanmakuLoading(false);
+      }
+    };
+    fetchDanmaku();
 
     // 清理函数：当依赖项变化或组件卸载时中止请求
     return () => {
