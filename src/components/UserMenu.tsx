@@ -1030,7 +1030,7 @@ export const UserMenu: React.FC = () => {
           {/* 弹幕自动尝试次数设置 */}
           <div className='flex items-center justify-between mt-2'>
             <div>
-              <h4 className='text-xs font-medium text-gray-700 dark:text-gray-300'>
+              <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300'>
                 弹幕自动尝试次数
               </h4>
               <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
