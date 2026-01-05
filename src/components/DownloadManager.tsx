@@ -1003,7 +1003,7 @@ const DownloadManager = ({ isOpen, onClose }: DownloadManagerProps) => {
                                 task.status === 'paused' ? '已暂停' : '等待中'}
                       </span>
                       <span className="text-gray-600 dark:text-gray-400">
-                        {task.progress.toFixed(1)}%
+                        {Math.floor(task.progress)}%
                       </span>
                     </div>
                     <div className="w-full bg-gray-200 dark:bg-gray-600 rounded-full h-2">
