@@ -117,6 +117,12 @@ export class TSToMP4Transmuxer {
  * @param duration - 视频时长（秒）
  * @returns MP4 格式的 Blob
  */
+/**
+ * 批量转码 TS 片段为 MP4
+ * @param tsSegments - TS 片段数组
+ * @param duration - 视频总时长（秒，可选）
+ * @returns MP4 格式的 Blob
+ */
 export function transmuxTSToMP4(tsSegments: ArrayBuffer[], duration?: number): Blob {
   const transmuxer = new TSToMP4Transmuxer(duration);
 

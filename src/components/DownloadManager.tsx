@@ -8,6 +8,7 @@ import { downloadM3U8Video, DownloadProgress, M3U8Task, parseM3U8, PauseResumeCo
 
 import AddDownloadModal from './AddDownloadModal';
 import SegmentViewer from './SegmentViewer';
+import { formatTime } from '@/lib/formatTime';
 
 
 interface DownloadTask {
@@ -802,9 +803,28 @@ const DownloadManager = ({ isOpen, onClose }: DownloadManagerProps) => {
                             {task.config.concurrency} 线程
                           </span>
                           {task.config.rangeMode && (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400">
-                              范围: {task.config.startSegment}-{task.config.endSegment}
-                            </span>
+                            (() => {
+                              // 计算时长范围
+                              let startTime = 0, endTime = 0;
+                              if (task.parsedTask && Array.isArray(task.parsedTask.segmentDurations)) {
+                                const { startSegment, endSegment } = task.parsedTask.rangeDownload;
+                                const segs = task.parsedTask.segmentDurations;
+                                startTime = segs.slice(0, startSegment - 1).reduce((a, b) => a + b, 0);
+                                endTime = segs.slice(0, endSegment).reduce((a, b) => a + b, 0);
+                              }
+                              // 格式化
+                              // 使用统一的 formatTime
+                              return (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400">
+                                  范围: {task.config.startSegment}-{task.config.endSegment}
+                                  {task.parsedTask && task.parsedTask.segmentDurations && task.parsedTask.segmentDurations.length > 0 && (
+                                    <>
+                                      &nbsp;|&nbsp;时长: {formatTime(startTime)} ~ {formatTime(endTime)}
+                                    </>
+                                  )}
+                                </span>
+                              );
+                            })()
                           )}
                           {task.parsedTask && (() => {
                             // 直接同步 SegmentViewer 的失败片段统计逻辑

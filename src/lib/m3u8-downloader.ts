@@ -73,6 +73,7 @@ export interface M3U8Task {
     key: string;
   };
   durationSecond: number;
+  segmentDurations: number[]; // 新增：每个片段的实际时长
   rangeDownload: {
     startSegment: number;
     endSegment: number;
@@ -195,6 +196,7 @@ export async function parseM3U8(url: string, depth = 0): Promise<M3U8Task> {
       key: '',
     },
     durationSecond: 0,
+    segmentDurations: [],
     rangeDownload: {
       startSegment: 1,
       endSegment: 0,
@@ -203,15 +205,20 @@ export async function parseM3U8(url: string, depth = 0): Promise<M3U8Task> {
     totalSize: 0,
   };
 
-  // 提取 ts 视频片段地址
+  // 提取 ts 视频片段地址和每个片段的时长
   const lines = m3u8Str.split('\n');
+  let lastDuration: number | null = null;
   for (const line of lines) {
     if (line.startsWith('#EXTINF:')) {
-      task.durationSecond += parseFloat(line.split('#EXTINF:')[1]);
+      lastDuration = parseFloat(line.split('#EXTINF:')[1]);
+      task.durationSecond += lastDuration;
     } else if (/^[^#]/.test(line) && line.trim()) {
       const tsUrl = applyURL(line.trim(), url);
       task.tsUrlList.push(tsUrl);
       task.finishList.push({ title: line.trim(), status: '' });
+      // 记录每个片段的时长
+      task.segmentDurations.push(lastDuration ?? 0);
+      lastDuration = null;
     }
   }
 
@@ -368,9 +375,10 @@ export async function downloadM3U8Video(
   const { startSegment, endSegment } = task.rangeDownload;
   const totalSegments = endSegment - startSegment + 1;
   
-  // 计算范围下载的实际时长
-  const segmentDuration = task.durationSecond / task.tsUrlList.length;
-  const rangeDuration = totalSegments * segmentDuration;
+  // 计算范围下载的实际时长（用每个片段的真实时长相加）
+  const rangeDuration = task.segmentDurations
+    .slice(startSegment - 1, endSegment)
+    .reduce((sum, d) => sum + d, 0);
   
   // 流式写入器（边下边存模式）
   let writer: WritableStreamDefaultWriter<Uint8Array> | null = null;
@@ -809,7 +817,9 @@ export async function downloadM3U8Video(
   // 如果是 MP4 格式，进行转码
   let blob: Blob;
   if (task.type === 'MP4') {
-    blob = transmuxTSToMP4(segments, rangeDuration);
+    // 传递范围内片段的实际时长累加值
+    const actualDuration = task.segmentDurations.slice(startSegment - 1, endSegment).reduce((a, b) => a + b, 0);
+    blob = transmuxTSToMP4(segments, actualDuration);
   } else {
     blob = mergeSegments(segments, task.type);
   }

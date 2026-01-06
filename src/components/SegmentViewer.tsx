@@ -4,6 +4,7 @@ import { RefreshCw, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { aesDecrypt, downloadTsSegment, M3U8Task, StreamSaverMode } from '@/lib/m3u8-downloader';
+import { formatTime } from '@/lib/formatTime';
 
 interface SegmentViewerProps {
   task: M3U8Task;
@@ -166,6 +167,13 @@ const SegmentViewer = ({ task, isOpen, onClose, onSegmentRetry, taskExists, conc
   const filteredSegments = task.finishList.slice(startSegment - 1, endSegment);
   const segmentOffset = startSegment - 1; // 用于计算实际索引
 
+  // 计算时长范围
+  const segmentDurations = task.segmentDurations || [];
+  const startTime = segmentDurations.slice(0, startSegment - 1).reduce((a, b) => a + b, 0);
+  const endTime = segmentDurations.slice(0, endSegment).reduce((a, b) => a + b, 0);
+
+  // 使用统一的 formatTime
+
   const successCount = filteredSegments.filter(item => item.status === 'success').length;
   const errorCount = filteredSegments.filter(item => item.status === 'error').length;
   const downloadingCount = filteredSegments.filter(item => item.status === 'downloading').length;
@@ -182,6 +190,9 @@ const SegmentViewer = ({ task, isOpen, onClose, onSegmentRetry, taskExists, conc
             </h2>
             <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
               {task.title}
+            </p>
+            <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+              片段范围：{startSegment} ~ {endSegment} &nbsp;|&nbsp; 时长范围：{formatTime(startTime)} ~ {formatTime(endTime)}
             </p>
           </div>
           <button
