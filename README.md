@@ -61,6 +61,8 @@
       - [直接运行（最简单，localstorage）](#直接运行最简单localstorage)
       - [Docker Compose](#docker-compose)
         - [local storage 存储](#local-storage-存储)
+        - [Kvrocks 存储（推荐）](#kvrocks-存储推荐)
+        - [Redis 存储（有一定的丢数据风险）](#redis-存储有一定的丢数据风险)
         - [Upstash 存储](#upstash-存储)
   - [环境变量](#环境变量)
   - [配置说明](#配置说明)
@@ -200,6 +202,73 @@ services:
       - '3000:3000'
     environment:
       - PASSWORD=password
+```
+
+##### Kvrocks 存储（推荐）
+
+```yml
+services:
+  moontv-core:
+    image: ghcr.io/stardm0/moontv:latest
+    container_name: moontv-core
+    restart: on-failure
+    ports:
+      - '3000:3000'
+    environment:
+      - USERNAME=admin
+      - PASSWORD=admin_password
+      - NEXT_PUBLIC_STORAGE_TYPE=kvrocks
+      - KVROCKS_URL=redis://moontv-kvrocks:6666
+    networks:
+      - moontv-network
+    depends_on:
+      - moontv-kvrocks
+  moontv-kvrocks:
+    image: apache/kvrocks
+    container_name: moontv-kvrocks
+    restart: unless-stopped
+    volumes:
+      - kvrocks-data:/var/lib/kvrocks
+    networks:
+      - moontv-network
+networks:
+  moontv-network:
+    driver: bridge
+volumes:
+  kvrocks-data:
+```
+
+##### Redis 存储（有一定的丢数据风险）
+
+```yml
+services:
+  moontv-core:
+    image: ghcr.io/stardm0/moontv:latest
+    container_name: moontv-core
+    restart: on-failure
+    ports:
+      - '3000:3000'
+    environment:
+      - USERNAME=admin
+      - PASSWORD=admin_password
+      - NEXT_PUBLIC_STORAGE_TYPE=redis
+      - REDIS_URL=redis://moontv-redis:6379
+    networks:
+      - moontv-network
+    depends_on:
+      - moontv-redis
+  moontv-redis:
+    image: redis:alpine
+    container_name: moontv-redis
+    restart: unless-stopped
+    networks:
+      - moontv-network
+    # 请开启持久化，否则升级/重启后数据丢失
+    volumes:
+      - ./data:/data
+networks:
+  moontv-network:
+    driver: bridge
 ```
 
 ##### Upstash 存储

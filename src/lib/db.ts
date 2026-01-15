@@ -2,15 +2,17 @@
 
 import { AdminConfig } from './admin.types';
 import { D1Storage } from './d1.db';
+import { KvrocksStorage } from './kvrocks.db';
 import { RedisStorage } from './redis.db';
 import { Favorite, IStorage, PlayRecord, SkipConfig } from './types';
 import { UpstashRedisStorage } from './upstash.db';
 
-// storage type 常量: 'localstorage' | 'redis' | 'upstash' | 'd1'，默认 'localstorage'
+// storage type 常量: 'localstorage' | 'redis' | 'kvrocks' | 'upstash' | 'd1'，默认 'localstorage'
 const STORAGE_TYPE =
   (process.env.NEXT_PUBLIC_STORAGE_TYPE as
     | 'localstorage'
     | 'redis'
+    | 'kvrocks'
     | 'upstash'
     | 'd1'
     | undefined) || 'localstorage';
@@ -20,6 +22,8 @@ function createStorage(): IStorage {
   switch (STORAGE_TYPE) {
     case 'redis':
       return new RedisStorage();
+    case 'kvrocks':
+      return new KvrocksStorage();
     case 'upstash':
       return new UpstashRedisStorage();
     case 'd1':

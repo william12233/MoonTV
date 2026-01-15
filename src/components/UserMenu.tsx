@@ -516,6 +516,7 @@ export const UserMenu: React.FC = () => {
     setEnablePreferBestSource(false);
     setAutoDanmakuEnabled(false);
     setPreferredDanmakuPlatform('bilibili1');
+    setDanmakuRetryCount(3); // 新增：重置弹幕自动尝试次数为3
 
     if (typeof window !== 'undefined') {
       localStorage.setItem('defaultAggregateSearch', JSON.stringify(true));
@@ -530,6 +531,7 @@ export const UserMenu: React.FC = () => {
       localStorage.setItem('enablePreferBestSource', JSON.stringify(false));
       localStorage.setItem('autoDanmakuEnabled', JSON.stringify(false));
       localStorage.setItem('preferredDanmakuPlatform', 'bilibili1');
+      localStorage.setItem('danmakuRetryCount', '3'); // 新增：重置本地弹幕自动尝试次数为3
     }
   };
 
