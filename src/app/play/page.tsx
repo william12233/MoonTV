@@ -1272,17 +1272,30 @@ function PlayPageClient() {
   // 集数切换
   // ---------------------------------------------------------------------------
   // 处理集数切换
-  const handleEpisodeChange = (episodeNumber: number) => {
+  const handleEpisodeChange = async (episodeNumber: number) => {
     if (episodeNumber === currentEpisodeIndexRef.current) return;
     if (episodeNumber >= 0 && episodeNumber < totalEpisodes) {
       // 在更换集数前保存当前播放进度
       if (artPlayerRef.current && artPlayerRef.current.paused) {
         saveCurrentPlayProgress();
       }
-      if(artPlayerRef.current){
+      if (artPlayerRef.current) {
         cleanupPlayer();
         setIsDanmakuPluginReady(false);
         setCurrentTooltip("");
+      }
+      // 检查是否有历史播放记录
+      try {
+        const allRecords = await getAllPlayRecords();
+        const key = generateStorageKey(currentSourceRef.current, currentIdRef.current);
+        const record = allRecords[key];
+        if (record && record.index - 1 === episodeNumber && record.play_time > 0) {
+          resumeTimeRef.current = record.play_time;
+        } else {
+          resumeTimeRef.current = 0;
+        }
+      } catch {
+        resumeTimeRef.current = 0;
       }
       setCurrentEpisodeIndex(episodeNumber);
     }

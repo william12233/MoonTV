@@ -294,6 +294,8 @@ const TopNav = ({ activePath }: TopNavProps) => {
         !searchBarRef.current.contains(event.target as Node)
       ) {
         setShowSearchBar(false);
+        if (openFilter) setOpenFilter(null);
+        if (showHistory) setShowHistory(false);
       }
     };
 
@@ -301,7 +303,7 @@ const TopNav = ({ activePath }: TopNavProps) => {
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [showSearchBar]);
+  }, [showSearchBar, openFilter, showHistory]);
 
   // 点击外部关闭历史弹窗
   useEffect(() => {
