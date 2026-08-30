@@ -11,6 +11,20 @@ export interface ChangelogEntry {
 
 export const changelog: ChangelogEntry[] = [
   {
+    version: "3.8.4",
+    date: "2026-08-26",
+    added: [
+      // 无新增内容
+    ],
+    changed: [
+      // 无变更内容
+    ],
+    fixed: [
+    "修复容器环境下tvbox对地址获取的问题",
+    "修复切换集数时推出全屏的问题"
+    ]
+  },
+  {
     version: "3.8.2",
     date: "2026-01-04",
     added: [

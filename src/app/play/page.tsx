@@ -220,6 +220,20 @@ function PlayPageClient() {
           danmukuPluginInstanceRef.current.config({ danmuku: url });
           danmukuPluginInstanceRef.current.load();
           lastDanmakuUrlRef.current = url;
+
+          if (pendingDanmakuVisibleRestoreRef.current !== null) {
+            const visible = pendingDanmakuVisibleRestoreRef.current;
+            if (danmakuVisibleRestoreTimerRef.current) {
+              clearTimeout(danmakuVisibleRestoreTimerRef.current);
+            }
+            danmakuVisibleRestoreTimerRef.current = setTimeout(() => {
+              danmakuConfigRef.current.visible = visible;
+              danmukuPluginInstanceRef.current?.config({ visible });
+              pendingDanmakuVisibleRestoreRef.current = null;
+              danmakuVisibleRestoreTimerRef.current = null;
+            }, DANMAKU_VISIBLE_RESTORE_DELAY_MS);
+          }
+
           setCurrentTooltip(matchedEpisode.episodeTitle);
         }
       } catch (e) {
@@ -322,9 +336,46 @@ function PlayPageClient() {
   const artRef = useRef<HTMLDivElement | null>(null);
   const danmukuPluginInstanceRef = useRef<any>(null); // 弹幕插件实例
   const lastDanmakuUrlRef = useRef<string>(''); // 上一次加载的弹幕 URL
+  const pendingDanmakuVisibleRestoreRef = useRef<boolean | null>(null); // 切集后待恢复的弹幕可见状态
+  const isEpisodeSwitchingRef = useRef(false); // 标记当前是否为切集切换
+  const danmakuVisibleRestoreTimerRef = useRef<NodeJS.Timeout | null>(null); // 延迟恢复弹幕可见性的定时器
 
   // Wake Lock 相关
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+  const DANMAKU_VISIBLE_RESTORE_DELAY_MS = 1500;
+
+  // 切换集数时临时隐藏弹幕，待弹幕获取成功后恢复
+  const hideDanmakuDuringEpisodeSwitch = () => {
+    if (danmakuVisibleRestoreTimerRef.current) {
+      clearTimeout(danmakuVisibleRestoreTimerRef.current);
+      danmakuVisibleRestoreTimerRef.current = null;
+    }
+
+    const inst = danmukuPluginInstanceRef.current as any;
+    const currentVisible =
+      typeof inst?.visible === 'boolean'
+        ? inst.visible
+        : !!danmakuConfigRef.current.visible;
+
+    pendingDanmakuVisibleRestoreRef.current = currentVisible;
+    danmakuConfigRef.current.visible = false;
+
+    if (!inst) return;
+
+    try {
+      inst.config({ visible: false });
+    } catch (_) {
+      // ignore
+    }
+
+    try {
+      if (typeof inst.visible === 'boolean') {
+        inst.visible = false;
+      }
+    } catch (_) {
+      // ignore
+    }
+  };
 
   // -----------------------------------------------------------------------------
   // 工具函数（Utils）
@@ -1275,13 +1326,13 @@ function PlayPageClient() {
   const handleEpisodeChange = async (episodeNumber: number) => {
     if (episodeNumber === currentEpisodeIndexRef.current) return;
     if (episodeNumber >= 0 && episodeNumber < totalEpisodes) {
+      isEpisodeSwitchingRef.current = true;
+      hideDanmakuDuringEpisodeSwitch();
       // 在更换集数前保存当前播放进度
       if (artPlayerRef.current && artPlayerRef.current.paused) {
         saveCurrentPlayProgress();
       }
       if (artPlayerRef.current) {
-        cleanupPlayer();
-        setIsDanmakuPluginReady(false);
         setCurrentTooltip("");
       }
       // 检查是否有历史播放记录
@@ -1305,12 +1356,12 @@ function PlayPageClient() {
     const d = detailRef.current;
     const idx = currentEpisodeIndexRef.current;
     if (d && d.episodes && idx > 0) {
+      isEpisodeSwitchingRef.current = true;
+      hideDanmakuDuringEpisodeSwitch();
       if (artPlayerRef.current && !artPlayerRef.current.paused) {
         saveCurrentPlayProgress();
       }
       if(artPlayerRef.current){
-        cleanupPlayer();
-        setIsDanmakuPluginReady(false);
         setCurrentTooltip("");
       }
       setCurrentEpisodeIndex(idx - 1);
@@ -1321,12 +1372,12 @@ function PlayPageClient() {
     const d = detailRef.current;
     const idx = currentEpisodeIndexRef.current;
     if (d && d.episodes && idx < d.episodes.length - 1) {
+      isEpisodeSwitchingRef.current = true;
+      hideDanmakuDuringEpisodeSwitch();
       if (artPlayerRef.current && !artPlayerRef.current.paused) {
         saveCurrentPlayProgress();
       }
       if(artPlayerRef.current){
-        cleanupPlayer();
-        setIsDanmakuPluginReady(false);
         setCurrentTooltip("");
       }
       setCurrentEpisodeIndex(idx + 1);
@@ -1649,6 +1700,23 @@ function PlayPageClient() {
     const isWebkit =
       typeof window !== 'undefined' &&
       typeof (window as any).webkitConvertPointFromNodeToPage === 'function';
+
+    // 切集时无论浏览器类型都优先复用实例，避免销毁播放器
+    if (artPlayerRef.current && isEpisodeSwitchingRef.current) {
+      artPlayerRef.current.switch = videoUrl;
+      artPlayerRef.current.title = `${videoTitle} - 第${
+        currentEpisodeIndex + 1
+      }集`;
+      artPlayerRef.current.poster = videoCover;
+      if (artPlayerRef.current?.video) {
+        ensureVideoSource(
+          artPlayerRef.current.video as HTMLVideoElement,
+          videoUrl
+        );
+      }
+      isEpisodeSwitchingRef.current = false;
+      return;
+    }
 
     // 非WebKit浏览器且播放器已存在，使用switch方法切换
     if (!isWebkit && artPlayerRef.current) {
@@ -2133,6 +2201,11 @@ function PlayPageClient() {
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
+      if (danmakuVisibleRestoreTimerRef.current) {
+        clearTimeout(danmakuVisibleRestoreTimerRef.current);
+        danmakuVisibleRestoreTimerRef.current = null;
+      }
+
       // 清理定时器
       if (saveIntervalRef.current) {
         clearInterval(saveIntervalRef.current);

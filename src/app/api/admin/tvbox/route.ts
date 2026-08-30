@@ -5,8 +5,14 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAuthInfoFromCookie } from '@/lib/auth';
 import { getConfig } from '@/lib/config';
 import { getStorage } from '@/lib/db';
+import { getRequestOrigin } from '@/lib/request-origin';
 
 export const runtime = 'edge';
+
+function buildTvboxConfigUrl(request: NextRequest) {
+  const origin = getRequestOrigin(request);
+  return `${origin}/api/tvbox/config`;
+}
 
 export async function GET(request: NextRequest) {
   const storageType = process.env.NEXT_PUBLIC_STORAGE_TYPE || 'localstorage';
@@ -14,16 +20,14 @@ export async function GET(request: NextRequest) {
 
   // 本地模式：不强制要求登录，用环境变量返回只读信息
   if (storageType === 'localstorage') {
-    const base = new URL(request.url);
-    base.pathname = '/api/tvbox/config';
-    base.search = '';
+    const baseUrl = buildTvboxConfigUrl(request);
     return NextResponse.json({
       enabled:
         (process.env.TVBOX_ENABLED == null || String(process.env.TVBOX_ENABLED).trim() === '')
           ? true
           : String(process.env.TVBOX_ENABLED).toLowerCase() === 'true',
       password: process.env.PASSWORD || '',
-      url: base.toString(),
+      url: baseUrl,
       localMode: true,
     });
   }
@@ -35,12 +39,10 @@ export async function GET(request: NextRequest) {
   }
 
   // 生成接口 URL（基于请求 URL 推导）
-  const base = new URL(request.url);
-  base.pathname = '/api/tvbox/config';
-  base.search = '';
+  const baseUrl = buildTvboxConfigUrl(request);
   // 为生成的订阅 URL 添加加密后的 un 查询参数
   const un = Buffer.from(authInfo.username, 'utf8').toString('base64');
-  const url = `${base.toString()}?un=${encodeURIComponent(un)}`;
+  const url = `${baseUrl}?un=${encodeURIComponent(un)}`;
 
   const payload = {
     enabled:
@@ -108,16 +110,14 @@ export async function POST(request: NextRequest) {
     await (storage as any).setAdminConfig(adminConfig);
   }
 
-  const base = new URL(request.url);
-  base.pathname = '/api/tvbox/config';
-  base.search = '';
+  const baseUrl = buildTvboxConfigUrl(request);
 
   return NextResponse.json({
     enabled: (adminConfig.SiteConfig as any).TVBoxEnabled === true,
     password: (adminConfig.SiteConfig as any).TVBoxPassword || '',
     url: (() => {
       const un = Buffer.from(username, 'utf8').toString('base64');
-      return `${base.toString()}?un=${encodeURIComponent(un)}`;
+      return `${baseUrl}?un=${encodeURIComponent(un)}`;
     })(),
   });
 }
