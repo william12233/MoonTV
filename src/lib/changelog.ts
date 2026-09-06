@@ -11,6 +11,36 @@ export interface ChangelogEntry {
 
 export const changelog: ChangelogEntry[] = [
   {
+    version: "4.0.0",
+    date: "2026-09-03",
+    added: [
+      // 无新增内容
+    ],
+    changed: [
+    "优化追更页最新集数获取逻辑",
+    "追更页最新集数获取进度可视化",
+    "优化数据迁移功能: 添加进度条和日志显示"
+    ],
+    fixed: [
+    "修复d1数据库数据迁移导入受限问题: 采用分批导入"
+    ]
+  },
+  {
+    version: "3.9.5",
+    date: "2026-09-03",
+    added: [
+    "新增追更功能"
+    ],
+    changed: [
+    "首页选项卡添加追更页",
+    "右键及长按弹窗和播放页面添加追更按钮",
+    "d1-init新增追更表(使用cf+d1部署的请自行更新数据库)"
+    ],
+    fixed: [
+    "修复用户未登录状态调用user/online 接口问题"
+    ]
+  },
+  {
     version: "3.8.4",
     date: "2026-08-26",
     added: [

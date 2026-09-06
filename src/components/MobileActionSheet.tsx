@@ -10,7 +10,7 @@ interface ActionItem {
   label: string;
   icon: React.ReactNode;
   onClick: (e?: React.MouseEvent) => void | Promise<void>;
-  color?: 'default' | 'danger' | 'primary';
+  color?: 'default' | 'danger' | 'primary' | 'warning';
   disabled?: boolean;
 }
 
@@ -135,6 +135,8 @@ const MobileActionSheet: React.FC<MobileActionSheetProps> = ({
         return 'text-red-600 dark:text-red-400';
       case 'primary':
         return 'text-green-600 dark:text-green-400';
+      case 'warning':
+        return 'text-amber-600 dark:text-amber-400';
       default:
         return 'text-gray-700 dark:text-gray-300';
     }
@@ -146,6 +148,8 @@ const MobileActionSheet: React.FC<MobileActionSheetProps> = ({
         return 'hover:bg-red-50/50 dark:hover:bg-red-900/10';
       case 'primary':
         return 'hover:bg-green-50/50 dark:hover:bg-green-900/10';
+      case 'warning':
+        return 'hover:bg-amber-50/50 dark:hover:bg-amber-900/10';
       default:
         return 'hover:bg-gray-50/50 dark:hover:bg-gray-800/20';
     }

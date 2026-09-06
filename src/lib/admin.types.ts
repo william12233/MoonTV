@@ -15,6 +15,8 @@ export interface AdminConfig {
     // TVBox 接口开关与访问密码
     TVBoxEnabled?: boolean;
     TVBoxPassword?: string;
+    // 播放进度自动保存间隔（秒），用于控制播放记录保存频率
+    PlaybackSaveInterval?: number;
   };
   UserConfig: {
     AllowRegister: boolean;

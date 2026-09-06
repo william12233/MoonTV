@@ -40,6 +40,10 @@ import Swal from 'sweetalert2';
 
 import { AdminConfig, AdminConfigResult } from '@/lib/admin.types';
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
+import {
+  getDefaultPlaybackSaveInterval,
+  PLAYBACK_SAVE_DEFAULT_SECONDS,
+} from '@/lib/playback-settings';
 
 import DataMigration from '@/components/DataMigration';
 import PageLayout from '@/components/PageLayout';
@@ -71,6 +75,7 @@ interface SiteConfig {
   TVBoxEnabled?: boolean;
   TVBoxPassword?: string;
   DanmakuApiBaseUrl?: string;
+  PlaybackSaveInterval?: number;
 }
 
 // 视频源数据类型
@@ -2221,6 +2226,7 @@ const SiteConfigComponent = ({ config }: { config: AdminConfig | null }) => {
     TVBoxEnabled: false,
     TVBoxPassword: '',
     DanmakuApiBaseUrl: '',
+    PlaybackSaveInterval: PLAYBACK_SAVE_DEFAULT_SECONDS,
   });
   // 保存状态
   const [saving, setSaving] = useState(false);
@@ -2287,6 +2293,15 @@ const SiteConfigComponent = ({ config }: { config: AdminConfig | null }) => {
     typeof window !== 'undefined' &&
     (window as any).RUNTIME_CONFIG?.STORAGE_TYPE === 'localstorage';
 
+  // 播放进度保存间隔的默认值：环境变量优先，否则按存储类型取默认（Upstash 20s，其余 5s）
+  const defaultSaveInterval =
+    Number(process.env.NEXT_PUBLIC_PLAYBACK_SAVE_INTERVAL) ||
+    getDefaultPlaybackSaveInterval(
+      typeof window !== 'undefined'
+        ? (window as any).RUNTIME_CONFIG?.STORAGE_TYPE
+        : 'localstorage'
+    );
+
   useEffect(() => {
     if (config?.SiteConfig) {
       setSiteSettings({
@@ -2302,6 +2317,8 @@ const SiteConfigComponent = ({ config }: { config: AdminConfig | null }) => {
         DanmakuApiBaseUrl:
           config.SiteConfig.DanmakuApiBaseUrl ||
           '',
+        PlaybackSaveInterval:
+          config.SiteConfig.PlaybackSaveInterval || defaultSaveInterval,
       });
     }
   }, [config]);
@@ -2746,6 +2763,32 @@ const SiteConfigComponent = ({ config }: { config: AdminConfig | null }) => {
           }
           className='w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-green-500 focus:border-transparent'
         />
+      </div>
+
+      {/* 播放进度自动保存间隔 */}
+      <div>
+        <div className='flex items-center justify-between'>
+          <label className='block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2'>
+            播放进度自动保存间隔（秒）
+          </label>
+        </div>
+        <input
+          type='number'
+          min={5}
+          max={300}
+          step={1}
+          value={siteSettings.PlaybackSaveInterval}
+          onChange={(e) =>
+            setSiteSettings((prev) => ({
+              ...prev,
+              PlaybackSaveInterval: Number(e.target.value),
+            }))
+          }
+          className='w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-green-500 focus:border-transparent'
+        />
+        <p className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
+          控制播放过程中每隔多少秒自动保存一次播放进度。数值越小进度保存越精确，但会带来更多接口请求与数据库写入；建议范围 5 ~ 60 秒（Upstash 等按量计费的存储建议 ≥ 20 秒）。默认值按存储类型给出（Upstash 20 秒，其余 5 秒）。
+        </p>
       </div>
 
       {/* 禁用黄色过滤器 */}

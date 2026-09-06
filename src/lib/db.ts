@@ -4,7 +4,14 @@ import { AdminConfig } from './admin.types';
 import { D1Storage } from './d1.db';
 import { KvrocksStorage } from './kvrocks.db';
 import { RedisStorage } from './redis.db';
-import { Favorite, IStorage, PlayRecord, SkipConfig } from './types';
+import {
+  Favorite,
+  Following,
+  IStorage,
+  PlayRecord,
+  SkipConfig,
+  TodayUpdatedRecord,
+} from './types';
 import { UpstashRedisStorage } from './upstash.db';
 
 // storage type 常量: 'localstorage' | 'redis' | 'kvrocks' | 'upstash' | 'd1'，默认 'localstorage'
@@ -136,6 +143,41 @@ export class DbManager {
     return favorite !== null;
   }
 
+  // 追更相关方法
+  async getFollowing(
+    userName: string,
+    source: string,
+    id: string
+  ): Promise<Following | null> {
+    const key = generateStorageKey(source, id);
+    return this.storage.getFollowing(userName, key);
+  }
+
+  async saveFollowing(
+    userName: string,
+    source: string,
+    id: string,
+    following: Following
+  ): Promise<void> {
+    const key = generateStorageKey(source, id);
+    await this.storage.setFollowing(userName, key, following);
+  }
+
+  async getAllFollowings(
+    userName: string
+  ): Promise<{ [key: string]: Following }> {
+    return this.storage.getAllFollowings(userName);
+  }
+
+  async deleteFollowing(
+    userName: string,
+    source: string,
+    id: string
+  ): Promise<void> {
+    const key = generateStorageKey(source, id);
+    await this.storage.deleteFollowing(userName, key);
+  }
+
   // ---------- 用户相关 ----------
   async registerUser(userName: string, password: string): Promise<void> {
     await this.storage.registerUser(userName, password);
@@ -227,6 +269,25 @@ export class DbManager {
     return {};
   }
 
+  // ---------- “今日新更” ----------
+  async getTodayUpdated(
+    userName: string
+  ): Promise<TodayUpdatedRecord | null> {
+    if (typeof (this.storage as any).getTodayUpdated === 'function') {
+      return (this.storage as any).getTodayUpdated(userName);
+    }
+    return null;
+  }
+
+  async setTodayUpdated(
+    userName: string,
+    record: TodayUpdatedRecord
+  ): Promise<void> {
+    if (typeof (this.storage as any).setTodayUpdated === 'function') {
+      await (this.storage as any).setTodayUpdated(userName, record);
+    }
+  }
+
   // ---------- 数据清理 ----------
   async clearAllData(): Promise<void> {
     if (typeof (this.storage as any).clearAllData === 'function') {
@@ -234,6 +295,100 @@ export class DbManager {
     } else {
       throw new Error('存储类型不支持清空数据操作');
     }
+  }
+
+  // ---------- 批量导入（数据迁移专用） ----------
+  // 仅 D1 存储实现了这些批量方法（借助 db.batch() 规避单次 Worker invocation
+  // 的 subrequest 限制）。其他存储类型返回 false，由调用方回退到逐条写入。
+  async batchImportPlayRecords(
+    username: string,
+    entries: Array<[string, PlayRecord]>,
+    onProgress?: (done: number, total: number) => void
+  ): Promise<boolean> {
+    if (typeof (this.storage as any).batchImportPlayRecords === 'function') {
+      await (this.storage as any).batchImportPlayRecords(
+        username,
+        entries,
+        onProgress
+      );
+      return true;
+    }
+    return false;
+  }
+
+  async batchImportFavorites(
+    username: string,
+    entries: Array<[string, Favorite]>,
+    onProgress?: (done: number, total: number) => void
+  ): Promise<boolean> {
+    if (typeof (this.storage as any).batchImportFavorites === 'function') {
+      await (this.storage as any).batchImportFavorites(
+        username,
+        entries,
+        onProgress
+      );
+      return true;
+    }
+    return false;
+  }
+
+  async batchImportFollowings(
+    username: string,
+    entries: Array<[string, Following]>,
+    onProgress?: (done: number, total: number) => void
+  ): Promise<boolean> {
+    if (typeof (this.storage as any).batchImportFollowings === 'function') {
+      await (this.storage as any).batchImportFollowings(
+        username,
+        entries,
+        onProgress
+      );
+      return true;
+    }
+    return false;
+  }
+
+  async batchImportSkipConfigs(
+    username: string,
+    entries: Array<[string, SkipConfig]>,
+    onProgress?: (done: number, total: number) => void
+  ): Promise<boolean> {
+    if (typeof (this.storage as any).batchImportSkipConfigs === 'function') {
+      await (this.storage as any).batchImportSkipConfigs(
+        username,
+        entries,
+        onProgress
+      );
+      return true;
+    }
+    return false;
+  }
+
+  async batchImportSearchHistory(
+    username: string,
+    keywords: string[],
+    onProgress?: (done: number, total: number) => void
+  ): Promise<boolean> {
+    if (typeof (this.storage as any).batchImportSearchHistory === 'function') {
+      await (this.storage as any).batchImportSearchHistory(
+        username,
+        keywords,
+        onProgress
+      );
+      return true;
+    }
+    return false;
+  }
+
+  async batchImportTodayUpdated(
+    username: string,
+    record: TodayUpdatedRecord
+  ): Promise<boolean> {
+    if (typeof (this.storage as any).batchImportTodayUpdated === 'function') {
+      await (this.storage as any).batchImportTodayUpdated(username, record);
+      return true;
+    }
+    return false;
   }
 }
 

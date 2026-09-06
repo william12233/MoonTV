@@ -7,15 +7,19 @@ import React, { useCallback, useMemo, useState } from 'react';
 
 import {
   deleteFavorite,
+  deleteFollowing,
   deletePlayRecord,
   generateStorageKey,
   isFavorited,
+  isFollowing,
   saveFavorite,
+  saveFollowing,
   subscribeToDataUpdates,
 } from '@/lib/db.client';
 import { SearchResult } from '@/lib/types';
 import { processImageUrl } from '@/lib/utils';
 
+import FollowingIcon from '@/components/FollowingIcon';
 import { ImagePlaceholder } from '@/components/ImagePlaceholder';
 import MobileActionSheet from '@/components/MobileActionSheet';
 import { useNavigationLoading } from '@/components/NavigationLoadingProvider';
@@ -29,6 +33,8 @@ interface VideoCardProps {
   episodes?: number;
   source_name?: string;
   progress?: number;
+  /** 是否隐藏下方的播放进度条（追更页卡片无需显示进度条） */
+  hideProgress?: boolean;
   year?: string;
   from: 'playrecord' | 'favorite' | 'search' | 'douban';
   currentEpisode?: number;
@@ -49,6 +55,7 @@ export default function VideoCard({
   source,
   source_name,
   progress = 0,
+  hideProgress = false,
   year,
   from,
   currentEpisode,
@@ -62,9 +69,11 @@ export default function VideoCard({
   const router = useRouter();
   const { startLoading } = useNavigationLoading();
   const [favorited, setFavorited] = useState(false);
+  const [following, setFollowing] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [showSources, setShowSources] = useState(false);
   const [favoriteChecked, setFavoriteChecked] = useState(false); // 是否已经检查过收藏状态
+  const [followingChecked, setFollowingChecked] = useState(false); // 是否已经检查过追更状态
   const [isActionOpen, setIsActionOpen] = useState(false);
   const [longPressTimer, setLongPressTimer] = useState<number | null>(null);
 
@@ -111,6 +120,11 @@ export default function VideoCard({
   const actualEpisodes = aggregateData?.mostFrequentEpisodes ?? episodes;
   const actualYear = aggregateData?.first.year ?? year;
   const actualQuery = query || '';
+  const sanitizedYear = actualYear && actualYear !== 'unknown' ? actualYear : '';
+  const sanitizedQuery =
+    actualQuery && actualQuery.trim() && actualQuery.trim() !== actualTitle.trim()
+      ? actualQuery.trim()
+      : '';
   const actualSearchType = isAggregate
     ? aggregateData?.first.episodes?.length === 1
       ? 'movie'
@@ -150,11 +164,11 @@ export default function VideoCard({
           await saveFavorite(actualSource, actualId, {
             title: actualTitle,
             source_name: source_name || '',
-            year: actualYear || '',
+            year: sanitizedYear,
             cover: actualPoster,
             total_episodes: actualEpisodes ?? 1,
             save_time: Date.now(),
-            search_title: actualQuery || '',
+            search_title: sanitizedQuery,
           });
           setFavorited(true);
         }
@@ -169,11 +183,69 @@ export default function VideoCard({
       actualId,
       actualTitle,
       source_name,
-      actualYear,
+      sanitizedYear,
       actualPoster,
       actualEpisodes,
-      actualQuery,
+      sanitizedQuery,
       favorited,
+    ]
+  );
+
+  const checkFollowingStatus = useCallback(async () => {
+    if (from === 'douban' || !actualSource || !actualId) return;
+    try {
+      const isFollowed = await isFollowing(actualSource, actualId);
+      setFollowing(isFollowed);
+      setFollowingChecked(true);
+
+      const storageKey = generateStorageKey(actualSource, actualId);
+      subscribeToDataUpdates('followingsUpdated', (newFollowings: Record<string, any>) => {
+        setFollowing(!!newFollowings[storageKey]);
+      });
+    } catch (err) {
+      console.error('检查追更状态失败', err);
+    }
+  }, [from, actualSource, actualId]);
+
+  const handleToggleFollowing = useCallback(
+    async (e?: React.MouseEvent) => {
+      e?.preventDefault();
+      e?.stopPropagation();
+      if (from === 'douban' || !actualSource || !actualId) return;
+      try {
+        if (following) {
+          await deleteFollowing(actualSource, actualId);
+          setFollowing(false);
+        } else {
+          await saveFollowing(actualSource, actualId, {
+            title: actualTitle,
+            source_name: source_name || '',
+            year: sanitizedYear,
+            cover: actualPoster,
+            total_episodes: actualEpisodes ?? 1,
+            watched_episodes: 0,
+            save_time: Date.now(),
+            search_title: sanitizedQuery,
+            source: actualSource,
+            id: actualId,
+          });
+          setFollowing(true);
+        }
+      } catch (err) {
+        console.error('切换追更状态失败', err);
+      }
+    },
+    [
+      from,
+      actualSource,
+      actualId,
+      actualTitle,
+      source_name,
+      sanitizedYear,
+      actualPoster,
+      actualEpisodes,
+      sanitizedQuery,
+      following,
     ]
   );
 
@@ -201,18 +273,26 @@ export default function VideoCard({
     if (from === 'douban') {
       router.push(
         `/play?title=${encodeURIComponent(actualTitle.trim())}${
-          actualYear ? `&year=${actualYear}` : ''
+          sanitizedYear ? `&year=${sanitizedYear}` : ''
         }${actualSearchType ? `&stype=${actualSearchType}` : ''}`
       );
     } else if (actualSource && actualId) {
+      // 携带当前播放集数（1 基）：追更页传的是按标题匹配得到的当前集数，
+      // 播放页挂载时优先采用该集数开始播放，避免因换片源导致 source+id 记录缺失而回到第 1 集
+      const startEp =
+        typeof currentEpisode === 'number' &&
+        Number.isInteger(currentEpisode) &&
+        currentEpisode >= 1
+          ? `&ep=${currentEpisode}`
+          : '';
       router.push(
         `/play?source=${actualSource}&id=${actualId}&title=${encodeURIComponent(
           actualTitle
-        )}${actualYear ? `&year=${actualYear}` : ''}${
+        )}${sanitizedYear ? `&year=${sanitizedYear}` : ''}${
           isAggregate ? '&prefer=true' : ''
         }${
-          actualQuery ? `&stitle=${encodeURIComponent(actualQuery.trim())}` : ''
-        }${actualSearchType ? `&stype=${actualSearchType}` : ''}`
+          sanitizedQuery ? `&stitle=${encodeURIComponent(sanitizedQuery)}` : ''
+        }${actualSearchType ? `&stype=${actualSearchType}` : ''}${startEp}`
       );
     }
   }, [
@@ -221,11 +301,12 @@ export default function VideoCard({
     actualId,
     router,
     actualTitle,
-    actualYear,
+    sanitizedYear,
     isAggregate,
-    actualQuery,
+    sanitizedQuery,
     actualSearchType,
     startLoading,
+    currentEpisode,
   ]);
 
   const config = useMemo(() => {
@@ -235,6 +316,7 @@ export default function VideoCard({
         showProgress: true,
         showPlayButton: true,
         showHeart: true,
+        showFollowButton: true,
         showCheckCircle: true,
         showDoubanLink: !!actualDoubanId,
         showRating: false,
@@ -244,6 +326,7 @@ export default function VideoCard({
         showProgress: false,
         showPlayButton: true,
         showHeart: true,
+        showFollowButton: true,
         showCheckCircle: false,
         showDoubanLink: !!actualDoubanId,
         showRating: false,
@@ -253,6 +336,7 @@ export default function VideoCard({
         showProgress: false,
         showPlayButton: true,
         showHeart: !isAggregate,
+        showFollowButton: !isAggregate,
         showCheckCircle: false,
         showDoubanLink: !!actualDoubanId,
         showRating: false,
@@ -262,6 +346,7 @@ export default function VideoCard({
         showProgress: false,
         showPlayButton: true,
         showHeart: false,
+        showFollowButton: false,
         showCheckCircle: false,
         showDoubanLink: true,
         showRating: !!rate,
@@ -273,7 +358,7 @@ export default function VideoCard({
   // 渲染
   return (
     <div
-      className="group relative w-full rounded-lg bg-transparent cursor-pointer transition-all duration-300 ease-in-out hover:scale-[1.05] hover:z-[500]"
+      className="group relative w-full rounded-lg bg-transparent cursor-pointer transition-all duration-300 ease-in-out hover:scale-[1.05] hover:z-[500] [container-type:inline-size]"
       style={{ userSelect: 'none', WebkitUserSelect: 'none', WebkitTouchCallout: 'none' }}
       onContextMenu={(e) => {
         e.preventDefault();
@@ -303,14 +388,16 @@ export default function VideoCard({
         }
       }}
       onMouseEnter={() => {
-          // 收藏夹里的卡片直接默认已收藏，不检查数据库
+          // 收藏夹里的卡片在该分支下默认已收藏，但仍需保持与首页/历史一致的追更状态检查
         if (from === 'favorite' && !favorited) {
           setFavorited(true);
           setFavoriteChecked(true);
-          return;
-        }
-        if (config.showHeart && !favoriteChecked) {
+        } else if (config.showHeart && !favoriteChecked) {
           checkFavoriteStatus();
+        }
+
+        if (config.showFollowButton && !followingChecked) {
+          checkFollowingStatus();
         }
       }}
     >
@@ -353,25 +440,44 @@ export default function VideoCard({
             </div>
           )}
 
-        {(config.showHeart || config.showCheckCircle) && (
-          <div className='absolute bottom-3 right-3 flex gap-3 opacity-0 translate-y-2 transition-all duration-300 ease-in-out group-hover:opacity-100 group-hover:translate-y-0'>
-            {config.showCheckCircle && (
+        {(config.showHeart || config.showFollowButton || config.showCheckCircle) && (
+          <div className='absolute bottom-3 inset-x-3 flex items-center justify-end opacity-0 translate-y-2 transition-all duration-300 ease-in-out group-hover:opacity-100 group-hover:translate-y-0 [gap:clamp(0px,4cqi,0.75rem)]'>
+            {config.showCheckCircle && onDelete && (
               <Trash2
                 onClick={handleDeleteRecord}
                 size={20}
-                className='text-white transition-all duration-300 ease-out hover:stroke-red-500 hover:scale-[1.1]'
+                className='flex-shrink-0 text-white transition-all duration-300 ease-out hover:stroke-red-500 hover:scale-[1.1]'
               />
             )}
             {config.showHeart && (
               <Heart
                 onClick={handleToggleFavorite}
                 size={20}
-                className={`transition-all duration-300 ease-out ${
+                className={`flex-shrink-0 transition-all duration-300 ease-out ${
                   favorited
                     ? 'fill-red-600 stroke-red-600'
                     : 'fill-transparent stroke-white hover:stroke-red-400'
                 } hover:scale-[1.1]`}
               />
+            )}
+            {config.showFollowButton && (
+              <button
+                type='button'
+                onClick={handleToggleFollowing}
+                className='flex-shrink-0 transition-all duration-300 ease-out hover:scale-[1.1]'
+                title={following ? '取消追更' : '加入追更'}
+                aria-label={following ? '取消追更' : '加入追更'}
+              >
+                <FollowingIcon
+                  filled={following}
+                  size={20}
+                  className={
+                    following
+                      ? 'text-amber-400'
+                      : 'text-white'
+                  }
+                />
+              </button>
             )}
           </div>
         )}
@@ -479,7 +585,7 @@ export default function VideoCard({
 
       </div>
 
-      {config.showProgress && progress !== undefined && (
+      {config.showProgress && !hideProgress && progress !== undefined && (
         <div className='mt-1 h-1 w-full bg-gray-200 rounded-full overflow-hidden'>
           <div
             className='h-full bg-green-500 transition-all duration-500 ease-out'
@@ -541,6 +647,13 @@ export default function VideoCard({
                   '_blank'
                 );
               } else if (actualSource && actualId) {
+                // 与主点击一致：携带当前播放集数（1 基）
+                const newTabStartEp =
+                  typeof currentEpisode === 'number' &&
+                  Number.isInteger(currentEpisode) &&
+                  currentEpisode >= 1
+                    ? `&ep=${currentEpisode}`
+                    : '';
                 window.open(
                   `/play?source=${actualSource}&id=${actualId}&title=${encodeURIComponent(
                     actualTitle
@@ -548,7 +661,7 @@ export default function VideoCard({
                     isAggregate ? '&prefer=true' : ''
                   }${
                     actualQuery ? `&stitle=${encodeURIComponent(actualQuery.trim())}` : ''
-                  }${actualSearchType ? `&stype=${actualSearchType}` : ''}`,
+                  }${actualSearchType ? `&stype=${actualSearchType}` : ''}${newTabStartEp}`,
                   '_blank'
                 );
               }
@@ -571,9 +684,24 @@ export default function VideoCard({
                       color: 'primary' as const,
                       onClick: (e?: React.MouseEvent) => handleToggleFavorite(e as React.MouseEvent),
                     },
+                following
+                  ? {
+                      id: 'unfollow',
+                      label: '取消追更',
+                      icon: <FollowingIcon variant='remove' size={18} className='text-amber-500' />,
+                      color: 'warning' as const,
+                      onClick: (e?: React.MouseEvent) => handleToggleFollowing(e as React.MouseEvent),
+                    }
+                  : {
+                      id: 'follow',
+                      label: '加入追更',
+                      icon: <FollowingIcon variant='add' size={18} className='text-amber-500' />,
+                      color: 'primary' as const,
+                      onClick: (e?: React.MouseEvent) => handleToggleFollowing(e as React.MouseEvent),
+                    },
               ]
             : []),
-          ...(from === 'playrecord' && actualSource && actualId
+          ...(from === 'playrecord' && actualSource && actualId && onDelete
             ? [
                 {
                   id: 'delete-record',

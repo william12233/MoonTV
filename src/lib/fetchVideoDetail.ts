@@ -12,6 +12,11 @@ interface FetchVideoDetailOptions {
 
 /**
  * 根据 source 与 id 获取视频详情（支持流式搜索）。
+ *
+ * 获取集数的优先级：搜索 > 详情。
+ *  - 优先通过流式搜索精确匹配 source+id（保证 source 一致）；
+ *  - 不使用标题模糊匹配兜底，避免误取其他来源/其他视频的集数；
+ *  - 仅当搜索无精确命中时，才调用详情接口兜底。
  */
 export async function fetchVideoDetail({
   source,
@@ -25,25 +30,33 @@ export async function fetchVideoDetail({
     throw new Error('无效的API来源');
   }
 
-  // 使用流式搜索尝试精确匹配
+  // 使用流式搜索获取集数（优先级最高），仅接受 source 一致的精确匹配
   if (fallbackTitle) {
     try {
-      for await (const results of searchFromApiStream(apiSite, fallbackTitle.trim(), true, timeout)) {
-        const exactMatch = results.find(
-          (item: SearchResult) =>
+      for await (const results of searchFromApiStream(
+        apiSite,
+        fallbackTitle.trim(),
+        true,
+        timeout
+      )) {
+        for (const item of results) {
+          // 精确匹配 source+id 且有集数，立即返回
+          if (
             item.source.toString() === source.toString() &&
-            item.id.toString() === id.toString()
-        );
-        if (exactMatch) {
-          return exactMatch; // 找到就立即返回
+            item.id.toString() === id.toString() &&
+            item.episodes &&
+            item.episodes.length > 0
+          ) {
+            return item;
+          }
         }
       }
     } catch (error) {
-      // 流式搜索失败时忽略
+      // 流式搜索失败时忽略，继续走详情兜底
     }
   }
 
-  // 流式搜索未命中或未提供 fallbackTitle，则调用 /api/detail
+  // 搜索未精确命中或未提供 fallbackTitle，则调用详情接口兜底
   const detail = await getDetailFromApi(apiSite, id);
   if (!detail) {
     throw new Error('获取视频详情失败');

@@ -12,6 +12,11 @@ export const runtime = 'edge';
 
 // pako 的 gzip 是同步的，不需要 promisify
 
+// 将对象编码为 SSE 事件文本
+function encodeSSE(data: any): string {
+  return `data: ${JSON.stringify(data)}\n\n`;
+}
+
 export async function POST(req: NextRequest) {
   try {
     // 检查存储类型
@@ -57,58 +62,165 @@ export async function POST(req: NextRequest) {
       }
     };
 
+    // 站长用户名（用于导出其密码等）
+    const adminUsername = process.env.USERNAME as string;
+
     // 获取所有用户
     let allUsers = await db.getAllUsers();
     // 添加站长用户
-    allUsers.push(process.env.USERNAME);
+    allUsers.push(adminUsername);
     allUsers = Array.from(new Set(allUsers));
+    const TOTAL_USERS = allUsers.length;
 
-    // 为每个用户收集数据
-    for (const username of allUsers) {
-      const userData = {
-        // 播放记录
-        playRecords: await db.getAllPlayRecords(username),
-        // 收藏夹
-        favorites: await db.getAllFavorites(username),
-        // 搜索历史
-        searchHistory: await db.getSearchHistory(username),
-        // 跳过片头片尾配置
-        skipConfigs: await db.getAllSkipConfigs(username),
-        // 用户密码（通过验证空密码来检查用户是否存在，然后获取密码）
-        password: await getUserPassword(username)
-      };
+    // 创建 SSE 流
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        // 推送 SSE 事件
+        const send = (data: any) => {
+          try {
+            controller.enqueue(encoder.encode(encodeSSE(data)));
+          } catch (err) {
+            // 客户端断开时忽略
+          }
+        };
 
-      exportData.data.userData[username] = userData;
-    }
+        try {
+          // 阶段 1：开始导出
+          send({ type: 'stage', message: '正在导出管理员配置...', percent: 0 });
 
-    // 覆盖站长密码
-    exportData.data.userData[process.env.USERNAME].password = process.env.PASSWORD;
+          // 阶段 2：逐用户收集数据
+          let userIndex = 0;
+          for (const username of allUsers) {
+            userIndex++;
+            // 用户进度：5% ~ 90%
+            const percent = Math.round(5 + (userIndex / TOTAL_USERS) * 85);
 
-    // 将数据转换为JSON字符串
-    const jsonData = JSON.stringify(exportData);
+            send({
+              type: 'user',
+              message: `正在导出用户 ${userIndex}/${TOTAL_USERS}: ${username}`,
+              username,
+              userIndex,
+              totalUsers: TOTAL_USERS,
+              percent,
+            });
 
-    // 先压缩数据
-    const compressedData = deflate(jsonData);
+            // 并行读取各类型数据以提升导出速度
+            const [
+              playRecords,
+              favorites,
+              followings,
+              todayUpdated,
+              searchHistory,
+              skipConfigs,
+              userPassword
+            ] = await Promise.all([
+              db.getAllPlayRecords(username),
+              db.getAllFavorites(username),
+              db.getAllFollowings(username),
+              db.getTodayUpdated(username),
+              db.getSearchHistory(username),
+              db.getAllSkipConfigs(username),
+              getUserPassword(username)
+            ]);
 
-    // 使用提供的密码加密压缩后的数据
-    const compressedBase64 = Buffer.from(compressedData).toString('base64');
-    const encryptedData = SimpleCrypto.encrypt(compressedBase64, password);
+            // 记录各类型条数用于日志展示
+            const counts: string[] = [];
+            const playCount = Object.keys(playRecords || {}).length;
+            const favCount = Object.keys(favorites || {}).length;
+            const folCount = Object.keys(followings || {}).length;
+            const searchCount = Array.isArray(searchHistory) ? searchHistory.length : 0;
+            const skipCount = Object.keys(skipConfigs || {}).length;
+            if (playCount) counts.push(`播放记录${playCount}`);
+            if (favCount) counts.push(`收藏${favCount}`);
+            if (folCount) counts.push(`追更${folCount}`);
+            if (todayUpdated) counts.push('今日新更');
+            if (searchCount) counts.push(`搜索历史${searchCount}`);
+            if (skipCount) counts.push(`跳过配置${skipCount}`);
+            send({
+              type: 'detail',
+              message: `用户 ${username}: ${counts.length ? counts.join('、') : '无数据'}`,
+              percent,
+            });
 
-    // 生成文件名
-    const now = new Date();
-    const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
-    const filename = `moontv-backup-${timestamp}.dat`;
+            exportData.data.userData[username] = {
+              // 播放记录
+              playRecords,
+              // 收藏夹
+              favorites,
+              // 追更
+              followings,
+              // 今日新更
+              todayUpdated,
+              // 搜索历史
+              searchHistory,
+              // 跳过片头片尾配置
+              skipConfigs,
+              // 用户密码
+              password: userPassword
+            };
+          }
 
-    // 返回加密的数据作为文件下载
-    return new NextResponse(encryptedData, {
-      status: 200,
-      headers: {
-        'Content-Type': 'application/octet-stream',
-        'Content-Disposition': `attachment; filename="${filename}"`,
-        'Content-Length': encryptedData.length.toString(),
+          // 覆盖站长密码
+          exportData.data.userData[adminUsername].password = process.env.PASSWORD as string;
+
+          // 阶段 3：压缩并加密
+          send({ type: 'stage', message: '正在压缩并加密数据...', percent: 92 });
+
+          // 将数据转换为JSON字符串
+          const jsonData = JSON.stringify(exportData);
+
+          // 先压缩数据
+          const compressedData = deflate(jsonData);
+
+          // 使用提供的密码加密压缩后的数据
+          const compressedBase64 = Buffer.from(compressedData).toString('base64');
+          const encryptedData = SimpleCrypto.encrypt(compressedBase64, password);
+
+          // 生成文件名
+          const now = new Date();
+          const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
+          const filename = `moontv-backup-${timestamp}.dat`;
+
+          // 阶段 4：分块推送加密后的文件数据（base64 字符串）
+          send({ type: 'file_start', filename, percent: 95 });
+
+          // 将加密数据分块推送，避免单条 SSE 事件过大
+          const CHUNK_SIZE = 64 * 1024; // 64KB
+          for (let i = 0; i < encryptedData.length; i += CHUNK_SIZE) {
+            send({
+              type: 'chunk',
+              data: encryptedData.slice(i, i + CHUNK_SIZE),
+            });
+          }
+
+          send({ type: 'file_end', percent: 100 });
+          send({
+            type: 'done',
+            message: '数据导出成功',
+            exportedUsers: TOTAL_USERS,
+            filename,
+            percent: 100,
+          });
+          controller.close();
+        } catch (error) {
+          console.error('数据导出失败:', error);
+          const errMsg = error instanceof Error ? error.message : '导出失败';
+          send({ type: 'error', message: errMsg });
+          controller.close();
+        }
       },
     });
 
+    return new NextResponse(stream, {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      },
+    });
   } catch (error) {
     console.error('数据导出失败:', error);
     return NextResponse.json(

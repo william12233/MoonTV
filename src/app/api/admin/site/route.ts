@@ -41,6 +41,7 @@ export async function POST(request: NextRequest) {
       DanmakuApiBaseUrl,
       TVBoxEnabled,
       TVBoxPassword,
+      PlaybackSaveInterval,
     } = body as {
       SiteName: string;
       Announcement: string;
@@ -54,6 +55,7 @@ export async function POST(request: NextRequest) {
       DanmakuApiBaseUrl?: string;
       TVBoxEnabled?: boolean;
       TVBoxPassword?: string;
+      PlaybackSaveInterval?: number;
     };
 
     // 参数校验
@@ -70,7 +72,12 @@ export async function POST(request: NextRequest) {
       (DanmakuApiBaseUrl !== undefined &&
         typeof DanmakuApiBaseUrl !== 'string') ||
       (TVBoxEnabled !== undefined && typeof TVBoxEnabled !== 'boolean') ||
-      (TVBoxPassword !== undefined && typeof TVBoxPassword !== 'string')
+      (TVBoxPassword !== undefined && typeof TVBoxPassword !== 'string') ||
+      (PlaybackSaveInterval !== undefined &&
+        (typeof PlaybackSaveInterval !== 'number' ||
+          !Number.isFinite(PlaybackSaveInterval) ||
+          PlaybackSaveInterval < 1 ||
+          PlaybackSaveInterval > 3600))
     ) {
       return NextResponse.json({ error: '参数格式错误' }, { status: 400 });
     }
@@ -103,6 +110,7 @@ export async function POST(request: NextRequest) {
       DanmakuApiBaseUrl,
       TVBoxEnabled,
       TVBoxPassword,
+      PlaybackSaveInterval,
     };
 
     // 同步更新 ConfigFile 中的 cache_time

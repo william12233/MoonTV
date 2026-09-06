@@ -25,6 +25,20 @@ export interface Favorite {
   search_title: string; // 搜索时使用的标题
 }
 
+// 追更数据结构
+export interface Following {
+  source_name: string;
+  total_episodes: number;
+  watched_episodes: number;
+  title: string;
+  year: string;
+  cover: string;
+  save_time: number;
+  search_title: string;
+  source?: string;
+  id?: string;
+}
+
 // 存储接口
 export interface IStorage {
   // 播放记录相关
@@ -42,6 +56,16 @@ export interface IStorage {
   setFavorite(userName: string, key: string, favorite: Favorite): Promise<void>;
   getAllFavorites(userName: string): Promise<{ [key: string]: Favorite }>;
   deleteFavorite(userName: string, key: string): Promise<void>;
+
+  // 追更相关
+  getFollowing(userName: string, key: string): Promise<Following | null>;
+  setFollowing(
+    userName: string,
+    key: string,
+    following: Following
+  ): Promise<void>;
+  getAllFollowings(userName: string): Promise<{ [key: string]: Following }>;
+  deleteFollowing(userName: string, key: string): Promise<void>;
 
   // 用户相关
   registerUser(userName: string, password: string): Promise<void>;
@@ -79,6 +103,13 @@ export interface IStorage {
   ): Promise<void>;
   deleteSkipConfig(userName: string, source: string, id: string): Promise<void>;
   getAllSkipConfigs(userName: string): Promise<{ [key: string]: SkipConfig }>;
+
+  // “今日新更”相关（保留一天、跟随账号跨设备）
+  getTodayUpdated(userName: string): Promise<TodayUpdatedRecord | null>;
+  setTodayUpdated(
+    userName: string,
+    record: TodayUpdatedRecord
+  ): Promise<void>;
 
   // 数据清理
   clearAllData(): Promise<void>;
@@ -120,6 +151,28 @@ export interface SkipConfig {
   enable: boolean; // 是否启用跳过片头片尾
   intro_time: number; // 片头时间（秒）
   outro_time: number; // 片尾时间（秒）
+}
+
+// “今日新更”条目数据结构（追更页当天检测到有新集数更新的影片）
+export interface TodayUpdatedItem {
+  source: string;
+  id: string;
+  title: string;
+  poster: string;
+  episodes: number;
+  watchedEpisodes: number;
+  unwatchedEpisodes: number;
+  source_name: string;
+  year: string;
+  save_time: number;
+  oldEpisodes: number;
+  newEpisodes: number;
+}
+
+// “今日新更”记录：按日期（YYYY-MM-DD）保存当天条目，跨天自动清空
+export interface TodayUpdatedRecord {
+  date: string; // YYYY-MM-DD
+  items: TodayUpdatedItem[];
 }
 
 // 弹幕数据结构
