@@ -177,6 +177,164 @@ export function createDanmakuDefaultConfig(): any {
   };
 }
 
+/** 弹幕设置本地存储键 */
+export const DANMAKU_SETTINGS_STORAGE_KEY = 'danmaku_settings';
+
+/**
+ * 可持久化到本地的弹幕设置字段。
+ *
+ * 仅包含用户可调的展示类设置，不包含 danmuku 地址、mount 等运行时字段。
+ */
+export interface DanmakuSettings {
+  /** 弹幕是否可见 */
+  visible: boolean;
+  /** 不透明度，范围 [0, 1] */
+  opacity: number;
+  /** 字号（像素） */
+  fontSize: number;
+  /** 弹幕速度，范围 [1, 10] */
+  speed: number;
+  /** 显示区域 [上边距, 下边距] */
+  margin: [number | string, number | string];
+  /** 发送弹幕的模式：0-滚动，1-顶部，2-底部 */
+  mode: number;
+  /** 可见的弹幕模式列表 */
+  modes: number[];
+  /** 是否防止弹幕重叠 */
+  antiOverlap: boolean;
+  /** 是否同步视频速度 */
+  synchronousPlayback: boolean;
+  /** 默认弹幕颜色 */
+  color: string;
+}
+
+/** 将数值限制在 [min, max] 区间内，非法值返回 undefined */
+function clampNumber(
+  value: unknown,
+  min: number,
+  max: number
+): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  return Math.min(max, Math.max(min, value));
+}
+
+/** 校验弹幕上下边距（支持像素数字与百分比字符串） */
+function normalizeMargin(
+  value: unknown
+): [number | string, number | string] | undefined {
+  if (!Array.isArray(value) || value.length !== 2) return undefined;
+
+  const normalizeEdge = (edge: unknown): number | string | undefined => {
+    if (typeof edge === 'number' && Number.isFinite(edge)) return edge;
+    if (typeof edge === 'string' && /^\d+(\.\d+)?%$/.test(edge)) return edge;
+    return undefined;
+  };
+
+  const top = normalizeEdge(value[0]);
+  const bottom = normalizeEdge(value[1]);
+  if (top === undefined || bottom === undefined) return undefined;
+
+  return [top, bottom];
+}
+
+/**
+ * 从（可能不完整或不可信的）弹幕配置对象中提取可持久化的设置字段。
+ *
+ * 同时用于写入前的字段提取与读取后的数据校验，避免脏数据注入播放器配置。
+ */
+export function pickDanmakuSettings(config: any): Partial<DanmakuSettings> {
+  const result: Partial<DanmakuSettings> = {};
+  if (!config || typeof config !== 'object') return result;
+
+  if (typeof config.visible === 'boolean') result.visible = config.visible;
+
+  const opacity = clampNumber(config.opacity, 0, 1);
+  if (opacity !== undefined) result.opacity = opacity;
+
+  const fontSize = clampNumber(config.fontSize, 12, 120);
+  if (fontSize !== undefined) result.fontSize = fontSize;
+
+  const speed = clampNumber(config.speed, 1, 10);
+  if (speed !== undefined) result.speed = speed;
+
+  const margin = normalizeMargin(config.margin);
+  if (margin) result.margin = margin;
+
+  const mode = clampNumber(config.mode, 0, 2);
+  if (mode !== undefined) result.mode = Math.round(mode);
+
+  if (Array.isArray(config.modes)) {
+    const modes = config.modes.filter(
+      (m: unknown): m is number =>
+        typeof m === 'number' && Number.isFinite(m) && m >= 0 && m <= 2
+    );
+    result.modes = Array.from(new Set(modes));
+  }
+
+  if (typeof config.antiOverlap === 'boolean') {
+    result.antiOverlap = config.antiOverlap;
+  }
+
+  if (typeof config.synchronousPlayback === 'boolean') {
+    result.synchronousPlayback = config.synchronousPlayback;
+  }
+
+  if (typeof config.color === 'string' && config.color) {
+    result.color = config.color;
+  }
+
+  return result;
+}
+
+/**
+ * 读取本地保存的弹幕设置（含校验），无有效数据时返回空对象。
+ */
+export function loadDanmakuSettings(): Partial<DanmakuSettings> {
+  if (typeof window === 'undefined') return {};
+
+  try {
+    const raw = window.localStorage.getItem(DANMAKU_SETTINGS_STORAGE_KEY);
+    if (!raw) return {};
+    return pickDanmakuSettings(JSON.parse(raw));
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * 将弹幕设置写入本地存储。
+ *
+ * 默认与已有设置合并，便于只更新部分字段；replace 为 true 时整体覆盖。
+ */
+export function saveDanmakuSettings(
+  settings: Partial<DanmakuSettings>,
+  options: { replace?: boolean } = {}
+): void {
+  if (typeof window === 'undefined') return;
+
+  try {
+    const merged = options.replace
+      ? settings
+      : { ...loadDanmakuSettings(), ...settings };
+    window.localStorage.setItem(
+      DANMAKU_SETTINGS_STORAGE_KEY,
+      JSON.stringify(merged)
+    );
+  } catch {
+    // localStorage 不可用（如隐私模式）时静默失败，不影响播放
+  }
+}
+
+/**
+ * 创建弹幕插件初始配置：默认配置叠加本地已保存的设置，刷新后可自动恢复。
+ */
+export function createDanmakuInitialConfig(): any {
+  return {
+    ...createDanmakuDefaultConfig(),
+    ...loadDanmakuSettings(),
+  };
+}
+
 /**
  * 创建"去广告"自定义 HLS Loader。
  *

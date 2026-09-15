@@ -11,6 +11,25 @@ export interface ChangelogEntry {
 
 export const changelog: ChangelogEntry[] = [
   {
+    version: "4.0.7",
+    date: "2026-09-10",
+    added: [
+      // 无新增内容
+    ],
+    changed: [
+    "优化追更影片当前播放集数获取逻辑",
+    "优化播放卡片集数跳转",
+    "优化播放记录删除逻辑",
+    "移除追更页卡片无用进度条",
+    "重构播放页代码",
+    "可控制播放进度保存频率",
+    "本地记忆弹幕设置"
+    ],
+    fixed: [
+      // 无修复内容
+    ]
+  },
+  {
     version: "4.0.0",
     date: "2026-09-03",
     added: [

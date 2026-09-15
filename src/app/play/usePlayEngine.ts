@@ -26,14 +26,17 @@ import { getRequestTimeout, getVideoResolutionFromM3u8 } from '@/lib/utils';
 
 import { triggerGlobalError } from '@/components/GlobalErrorIndicator';
 
+import { wrapArtplayerPluginDanmuku } from './danmuku-live-font-size';
 import { useVideoActions } from './hooks/useVideoActions';
 import { useWakeLock } from './hooks/useWakeLock';
 import {
   calculateSourceScore,
   createCustomHlsLoader,
-  createDanmakuDefaultConfig,
+  createDanmakuInitialConfig,
   DANMAKU_VISIBLE_RESTORE_DELAY_MS,
   formatTime,
+  pickDanmakuSettings,
+  saveDanmakuSettings,
   SkipConfig,
 } from './play-utils';
 
@@ -265,7 +268,8 @@ export function usePlayEngine() {
   const lastPlaybackRateRef = useRef<number>(1.0);
   const lastFullscreenRef = useRef<boolean>(false);
   const lastFullscreenWebRef = useRef<boolean>(false);
-  const danmakuConfigRef = useRef<any>(createDanmakuDefaultConfig());
+  // 弹幕插件配置：默认配置叠加本地持久化的用户设置，保证刷新后自动恢复
+  const danmakuConfigRef = useRef<any>(createDanmakuInitialConfig());
 
   // 换源相关状态
   const [availableSources, setAvailableSources] = useState<SearchResult[]>([]);
@@ -1460,7 +1464,8 @@ export function usePlayEngine() {
         if (!mounted) return;
         artLibRef.current = Art;
         hlsLibRef.current = Hls;
-        danmukuPluginRef.current = artplayerPluginDanmuku;
+        danmukuPluginRef.current =
+          wrapArtplayerPluginDanmuku(artplayerPluginDanmuku);
         setLibsReady(true);
       } catch (err) {
         console.error('加载播放器库失败:', err);
@@ -1828,6 +1833,28 @@ export function usePlayEngine() {
           // ignore
         }
       });
+
+      // 监听弹幕配置变化：同步到 ref（供重建播放器时恢复）并持久化到本地，
+      // 使用户调整的弹幕设置（不透明度、字号、速度、显示区域等）刷新后依然生效。
+      artPlayerRef.current.on(
+        'artplayerPluginDanmuku:config',
+        (option: any) => {
+          if (!option || typeof option !== 'object') return;
+
+          // 更新恢复用配置，剔除运行时字段，避免重建播放器时引用已销毁的节点
+          const next = { ...option };
+          delete next.mount;
+          next.danmuku = '';
+          danmakuConfigRef.current = next;
+
+          const picked = pickDanmakuSettings(option);
+          // 切集时会临时隐藏弹幕，此时不持久化可见性，避免把临时状态写入本地
+          if (pendingDanmakuVisibleRestoreRef.current !== null) {
+            delete picked.visible;
+          }
+          saveDanmakuSettings(picked);
+        }
+      );
 
       // 监听播放状态变化，控制 Wake Lock
       artPlayerRef.current.on('play', () => {
