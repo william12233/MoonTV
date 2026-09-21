@@ -386,6 +386,94 @@ export async function downloadTsSegment(url: string, signal?: AbortSignal): Prom
   return response.arrayBuffer();
 }
 
+/** 大于此大小的片段才启用 Range 分块下载（字节） */
+const RANGE_CHUNK_THRESHOLD = 512 * 1024;
+/** 单个片段分块数 */
+const RANGE_CHUNK_COUNT = 4;
+
+/** 按 Range 并发分块下载一个片段，合并后返回 */
+async function downloadByRanges(
+  url: string,
+  totalSize: number,
+  signal?: AbortSignal
+): Promise<ArrayBuffer> {
+  const chunkSize = Math.ceil(totalSize / RANGE_CHUNK_COUNT);
+  const tasks: Promise<{ index: number; data: ArrayBuffer }>[] = [];
+  for (let i = 0; i < RANGE_CHUNK_COUNT; i++) {
+    const start = i * chunkSize;
+    if (start >= totalSize) break;
+    const end = Math.min(start + chunkSize - 1, totalSize - 1);
+    tasks.push(
+      (async () => {
+        const resp = await fetch(url, {
+          signal,
+          headers: { Range: `bytes=${start}-${end}` },
+        });
+        // 必须是 206，否则说明源站忽略了 Range（会返回完整文件，导致拼接错误）
+        if (resp.status !== 206) throw new Error('Range not supported');
+        return { index: i, data: await resp.arrayBuffer() };
+      })()
+    );
+  }
+  const results = await Promise.all(tasks);
+  const merged = new Uint8Array(totalSize);
+  let offset = 0;
+  results.sort((a, b) => a.index - b.index);
+  for (const r of results) {
+    merged.set(new Uint8Array(r.data), offset);
+    offset += r.data.byteLength;
+  }
+  return merged.buffer;
+}
+
+/**
+ * 带 Range 分块的片段下载（下载核心用）。
+ *
+ * 对较大片段先用 `Range: bytes=0-0` 探测大小，再分 4 块并发下载，突破
+ * 单连接限速。小片段 / 不支持 Range 的源自动回退整段下载。
+ */
+export async function downloadTsSegmentConcurrent(
+  url: string,
+  signal?: AbortSignal
+): Promise<ArrayBuffer> {
+  // 1) 探测文件大小。注意：不支持 Range 的源会忽略请求头、返回 200 + 完整文件，
+  //    此时 probe 本身就是完整片段，必须直接返回——否则会白白下载一遍再整段重下，
+  //    等于每个片段下载两遍（曾导致下载速度直接减半）。
+  let totalSize = 0;
+  try {
+    const probe = await fetch(url, { signal, headers: { Range: 'bytes=0-0' } });
+    if (probe.status === 206) {
+      const cr = probe.headers.get('Content-Range');
+      const m = cr?.match(/\/(\d+)$/);
+      if (m) totalSize = parseInt(m[1], 10);
+      // 消费探测响应 body（1 字节），避免连接泄漏
+      await probe.arrayBuffer().catch(() => undefined);
+    } else if (probe.ok) {
+      // 源站不支持 Range：这个响应就是完整片段，直接用，不再重复下载
+      return await probe.arrayBuffer();
+    }
+  } catch {
+    // 探测失败（含 abort），走整段下载兜底
+  }
+
+  // 2) 大片段分块下载；失败回退整段
+  if (totalSize > RANGE_CHUNK_THRESHOLD) {
+    try {
+      return await downloadByRanges(url, totalSize, signal);
+    } catch (err) {
+      if (signal?.aborted) throw err;
+      // 分块失败（如 Range 未生效），回退整段下载
+    }
+  }
+
+  // 3) 整段下载
+  const response = await fetch(url, { signal });
+  if (!response.ok) {
+    throw new Error(`下载失败: ${response.status}`);
+  }
+  return response.arrayBuffer();
+}
+
 /**
  * 合并所有片段为 Blob
  */
@@ -434,7 +522,7 @@ export async function downloadM3U8Video(
   onProgress?: (progress: DownloadProgress) => void,
   signal?: AbortSignal,
   pauseResumeController?: PauseResumeController, // 暂停/恢复控制器
-  concurrency = 6, // 默认6个并发
+  concurrency = 16, // 默认16个并发（下载提速）
   streamMode: StreamSaverMode = 'disabled', // 边下边存模式
   maxRetries = 3, // 最大重试次数
   completeStreamRef?: { current: (() => Promise<void>) | null }, // 完成流函数引用（用于边下边存模式立即保存）
@@ -510,7 +598,26 @@ export async function downloadM3U8Video(
   
   let completedCount = 0;
 
-  // 串行化写入函数：确保写入操作按顺序执行，避免多线程并发写入
+  // 断点续传：初始化时统计范围内已成功的片段，确保进度条显示正确的恢复进度
+  for (let i = startSegment - 1; i < endSegment; i++) {
+    if (task.finishList[i]?.status === 'success') {
+      completedCount++;
+    }
+  }
+  // 同步更新 task.finishNum，确保内部统计一致
+  if (completedCount > 0) {
+    task.finishNum = completedCount;
+    // 立即触发一次进度回调，确保UI立刻显示正确的恢复进度
+    onProgress?.({
+      current: completedCount,
+      total: totalSegments,
+      percentage: Math.floor((completedCount / totalSegments) * 100),
+      status: 'downloading',
+      message: `正在恢复下载 ${completedCount}/${totalSegments} 个片段已完成`,
+    });
+  }
+
+  // 串行化写入函数：确保写入操作按顺序执行，避免多线程并发写入导致数据丢失
   const flushPendingWrites = async (): Promise<void> => {
     // 等待之前的写入操作完成
     await writeLock;
@@ -642,7 +749,7 @@ export async function downloadM3U8Video(
         throw new Error('下载已取消');
       }
 
-      let segmentData = await downloadTsSegment(task.tsUrlList[index], signal);
+      let segmentData = await downloadTsSegmentConcurrent(task.tsUrlList[index], signal);
 
       // 下载完成后检查暂停状态，如果暂停则等待恢复
       if (pauseResumeController) {
