@@ -44,7 +44,11 @@ import {
 } from '@/lib/playback-recovery';
 import { getDefaultPlaybackSaveInterval } from '@/lib/playback-settings';
 import { SearchResult } from '@/lib/types';
-import { getRequestTimeout, getVideoResolutionFromM3u8 } from '@/lib/utils';
+import {
+  getRequestTimeout,
+  getVideoResolutionFromM3u8,
+  processImageUrl,
+} from '@/lib/utils';
 import {
   getSegmentProbe,
   loadCacheSettings,
@@ -423,6 +427,8 @@ export function usePlayEngine() {
 
   const artPlayerRef = useRef<any>(null);
   const artRef = useRef<HTMLDivElement | null>(null);
+  /** ArtPlayer 根节点，供把返回/标题 portal 进播放器（全屏也能看见） */
+  const [playerHost, setPlayerHost] = useState<HTMLElement | null>(null);
   const danmukuPluginInstanceRef = useRef<any>(null); // 弹幕插件实例
   const lastDanmakuUrlRef = useRef<string>(''); // 上一次加载的弹幕 URL
   const pendingDanmakuVisibleRestoreRef = useRef<boolean | null>(null); // 切集后待恢复的弹幕可见状态
@@ -700,6 +706,7 @@ export function usePlayEngine() {
     // 先取消待执行的退避重试，避免定时器醒来后操作已销毁的 hls 实例
     recoveryRef.current?.dispose();
     recoveryRef.current = null;
+    setPlayerHost(null);
 
     if (artPlayerRef.current) {
       try {
@@ -1766,7 +1773,7 @@ export function usePlayEngine() {
       artPlayerRef.current.title = `${videoTitle} - 第${
         currentEpisodeIndex + 1
       }集`;
-      artPlayerRef.current.poster = videoCover;
+      artPlayerRef.current.poster = processImageUrl(videoCover);
       if (artPlayerRef.current?.video) {
         ensureVideoSource(
           artPlayerRef.current.video as HTMLVideoElement,
@@ -1783,7 +1790,7 @@ export function usePlayEngine() {
       artPlayerRef.current.title = `${videoTitle} - 第${
         currentEpisodeIndex + 1
       }集`;
-      artPlayerRef.current.poster = videoCover;
+      artPlayerRef.current.poster = processImageUrl(videoCover);
       if (artPlayerRef.current?.video) {
         ensureVideoSource(
           artPlayerRef.current.video as HTMLVideoElement,
@@ -1844,6 +1851,11 @@ export function usePlayEngine() {
         prefetcherRef.current.ensure({
           m3u8Url,
           currentTime,
+          title: videoTitleRef.current || '未知影片',
+          source:
+            detailRef.current?.source_name ||
+            currentSourceRef.current ||
+            '未知来源',
           episodeKey: `${currentSourceRef.current}:${currentIdRef.current}:${currentEpisodeIndexRef.current}`,
           preferredHeight: preferredHeightRef.current,
           ...(horizonSeconds === undefined ? {} : { horizonSeconds }),
@@ -1890,6 +1902,11 @@ export function usePlayEngine() {
         getNextEpisodePrefetcher().ensure({
           m3u8Url: nextUrl,
           currentTime: 0,
+          title: videoTitleRef.current || '未知影片',
+          source:
+            detailRef.current?.source_name ||
+            currentSourceRef.current ||
+            '未知来源',
           episodeKey: `${currentSourceRef.current}:${currentIdRef.current}:${nextIndex}`,
           preferredHeight: preferred,
           horizonSeconds: NEXT_EPISODE_HORIZON_SECONDS,
@@ -2004,7 +2021,11 @@ export function usePlayEngine() {
             }
             const hls = new Hls({
               debug: false, // 关闭日志
-              enableWorker: true, // WebWorker 解码，降低主线程压力
+              enableWorker: false, // 必须关闭 Worker：Fragment 加载在 Worker 里拿不到 Cache Storage，
+                                  // 也不会调用主线程里写了「缓存优先」的 CustomHlsLoader，
+                                  // 会导致 Cache Storage 里明明写满了数据但播放时全走网络。
+                                  // 90MB 的 maxBufferSize + Cache Storage 前向预取已经足够稳，
+                                  // 放弃 Worker 换缓存命中收益性价比更高。
 
               // VOD 场景关闭低延迟模式：LL-HLS 会主动压缩前向缓冲，与"多缓存"目标相悖
               lowLatencyMode: false,
@@ -2336,6 +2357,15 @@ export function usePlayEngine() {
           },
         ],
       });
+
+      const playerEl =
+        (artPlayerRef.current.template?.$player as HTMLElement | undefined) ||
+        (artRef.current?.querySelector(
+          '.art-video-player'
+        ) as HTMLElement | null);
+      if (playerEl) {
+        setPlayerHost(playerEl);
+      }
 
       // 监听播放器事件
       artPlayerRef.current.on('ready', () => {
@@ -2730,6 +2760,7 @@ export function usePlayEngine() {
     skipConfig,
     // 播放器
     artRef,
+    playerHost,
     isVideoLoading,
     videoLoadingStage,
     setLoading,

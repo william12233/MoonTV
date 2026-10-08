@@ -5,6 +5,7 @@
 import { Download, Heart } from 'lucide-react';
 
 import { SearchResult } from '@/lib/types';
+import { processImageUrl } from '@/lib/utils';
 
 import { FollowingIconButton } from '@/components/FollowingIcon';
 
@@ -47,20 +48,36 @@ export function VideoDetailPanel(props: VideoDetailPanelProps) {
   } = props;
 
   return (
-    <div className='grid grid-cols-1 gap-4'>
+    <div className='grid grid-cols-1 md:grid-cols-[auto_1fr] gap-6'>
+      {/* 封面图片区 */}
+      {detail?.poster && (
+        <div className='flex-shrink-0 mx-auto md:mx-0'>
+          <div className='w-32 sm:w-40 md:w-48 lg:w-56 aspect-[2/3] rounded-lg overflow-hidden shadow-lg bg-gray-200 dark:bg-gray-700'>
+            <img
+              src={processImageUrl(detail.poster)}
+              alt={videoTitle || '影片封面'}
+              className='w-full h-full object-cover'
+              onError={(e) => {
+                const target = e.target as HTMLImageElement;
+                target.style.display = 'none';
+              }}
+            />
+          </div>
+        </div>
+      )}
       {/* 文字区 */}
-      <div className='w-full'>
-        <div className='p-6 flex flex-col min-h-0'>
+      <div className='w-full min-w-0'>
+        <div className='p-0 md:p-2 flex flex-col min-h-0'>
           {/* 标题 */}
-          <h1 className='text-3xl font-bold mb-2 tracking-wide flex items-center flex-shrink-0 text-center md:text-left w-full'>
-            {videoTitle || '影片标题'}
+          <h1 className='text-2xl sm:text-3xl font-bold mb-2 tracking-wide flex items-center flex-wrap flex-shrink-0 text-center md:text-left w-full justify-center md:justify-start'>
+            <span className='truncate'>{videoTitle || '影片标题'}</span>
             {totalEpisodes > 1 && (
-              <span className='text-gray-500 dark:text-gray-400 text-2xl ml-3'>
+              <span className='text-gray-500 dark:text-gray-400 text-xl sm:text-2xl ml-2 md:ml-3'>
                 {detail?.episodes_titles?.[currentEpisodeIndex] ||
                   `第 ${currentEpisodeIndex + 1} 集`}
               </span>
             )}
-            <div className='ml-3 flex flex-shrink-0 items-center gap-3'>
+            <div className='ml-0 md:ml-3 mt-2 md:mt-0 flex flex-shrink-0 items-center gap-3'>
               <button
                 type='button'
                 onClick={(e) => {
@@ -135,7 +152,7 @@ export function VideoDetailPanel(props: VideoDetailPanelProps) {
           </h1>
 
           {/* 关键信息行 */}
-          <div className='flex flex-wrap items-center gap-3 text-base mb-4 opacity-80 flex-shrink-0'>
+          <div className='flex flex-wrap items-center gap-3 text-base mb-4 opacity-80 flex-shrink-0 justify-center md:justify-start'>
             {detail?.class && (
               <span className='text-green-600 font-semibold'>
                 {detail.class}
@@ -154,7 +171,7 @@ export function VideoDetailPanel(props: VideoDetailPanelProps) {
           {/* 剧情简介 */}
           {detail?.desc && (
             <div
-              className='mt-0 text-base leading-relaxed opacity-90 overflow-y-auto pr-2 flex-1 min-h-0 scrollbar-hide'
+              className='mt-0 text-base leading-relaxed opacity-90 overflow-y-auto pr-2 flex-1 min-h-0 scrollbar-hide max-h-48 md:max-h-none'
               style={{ whiteSpace: 'pre-line' }}
             >
               {detail.desc}

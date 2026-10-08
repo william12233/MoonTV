@@ -143,6 +143,27 @@ div[data-media-provider] video {
   background-color: #000 !important; /* 其余区域填充为黑色 */
 }
 
+/* 播放器内顶栏：和底部控制栏同步显隐，锁屏时一并藏起 */
+.art-video-player .moontv-play-header {
+  transition: opacity 0.2s ease, visibility 0.2s ease;
+}
+
+.art-video-player:not(.art-control-show):not(.art-hover) .moontv-play-header,
+.art-video-player.art-hide-cursor .moontv-play-header,
+.art-video-player.art-lock .moontv-play-header {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none !important;
+}
+
+/* 全屏时 fixed 会相对播放器（或被 transform 限制），改成铺满播放器本身 */
+.art-video-player:fullscreen .moontv-player-modal > div,
+.art-video-player:-webkit-full-screen .moontv-player-modal > div,
+.art-video-player.art-fullscreen-web .moontv-player-modal > div,
+.art-video-player.art-fullscreen .moontv-player-modal > div {
+  position: absolute;
+}
+
 /* 隐藏移动端竖屏时的 pip 按钮 */
 @media (max-width: 768px) {
   .art-control-pip {

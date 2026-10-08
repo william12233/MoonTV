@@ -48,6 +48,10 @@ export interface PrefetchOptions {
   m3u8Url: string;
   /** 当前播放位置（秒） */
   currentTime: number;
+  /** 当前影片名称，用于缓存面板展示 */
+  title?: string;
+  /** 影视源名称，用于缓存面板展示 */
+  source?: string;
   /** 剧集标识，用于分集统计与淘汰 */
   episodeKey: string;
   /** 覆盖 settings.horizonSeconds */
@@ -469,6 +473,8 @@ export class VideoPrefetcher {
           await metaStore.put({
             key: cacheKey,
             episodeKey: options.episodeKey,
+            title: options.title || '未知影片',
+            source: options.source || '未知来源',
             index: segmentIndex + 1,
             bytes: buffer.byteLength,
             costMs,

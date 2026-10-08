@@ -17,6 +17,8 @@ interface BackButtonProps {
   label?: string;
   /** 追加的样式类 */
   className?: string;
+  /** `overlay` 用于深色播放器画面上的浅色按钮 */
+  variant?: 'default' | 'overlay';
 }
 
 /**
@@ -29,6 +31,7 @@ export function BackButton({
   showLabel = false,
   label = '返回',
   className = '',
+  variant = 'default',
 }: BackButtonProps) {
   const router = useRouter();
 
@@ -44,11 +47,16 @@ export function BackButton({
     ? 'inline-flex h-9 items-center gap-1.5 rounded-full px-3.5 text-sm transition-colors'
     : 'flex h-10 w-10 items-center justify-center rounded-full p-2 transition-colors';
 
+  const toneClass =
+    variant === 'overlay'
+      ? 'bg-white/15 text-white hover:bg-white/25 backdrop-blur-sm'
+      : 'bg-gray-200/70 text-gray-700 hover:bg-gray-300/80 dark:bg-gray-700/70 dark:text-gray-200 dark:hover:bg-gray-600/80';
+
   return (
     <button
       type='button'
       onClick={handleBack}
-      className={`${baseClass} bg-gray-200/70 text-gray-700 hover:bg-gray-300/80 dark:bg-gray-700/70 dark:text-gray-200 dark:hover:bg-gray-600/80 ${className}`}
+      className={`${baseClass} ${toneClass} ${className}`}
       aria-label={label}
       title={label}
     >

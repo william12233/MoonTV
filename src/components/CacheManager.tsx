@@ -23,6 +23,37 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(value >= 100 || unit === 0 ? 0 : 1)} ${units[unit]}`;
 }
 
+function normalizeSourceName(source?: string): string {
+  const value = source?.trim();
+  if (!value) return '未知来源';
+
+  if (/^https?:\/\//i.test(value)) {
+    try {
+      const host = new URL(value).hostname.replace(/^www\./i, '');
+      return host || '未知来源';
+    } catch {
+      return '未知来源';
+    }
+  }
+
+  if (value.includes('.') && !/\s/.test(value)) {
+    const host = value.replace(/^www\./i, '').split('.')[0];
+    return host || '未知来源';
+  }
+
+  return value;
+}
+
+function formatEpisodeCacheLabel(ep: { title?: string; source?: string; episodeKey: string }): string {
+  const title = ep.title?.trim() || '未知影片';
+  const source = normalizeSourceName(ep.source);
+  const episodeParts = ep.episodeKey.split(':').filter(Boolean);
+  const rawEpisodeIndex = Number(episodeParts[episodeParts.length - 1]);
+  const episodeNumber = Number.isNaN(rawEpisodeIndex) ? 1 : rawEpisodeIndex + 1;
+
+  return `${title} · ${source} · 第 ${episodeNumber} 集`;
+}
+
 interface CacheManagerProps {
   isOpen: boolean;
   onClose: () => void;
@@ -105,7 +136,7 @@ export default function CacheManager({ isOpen, onClose }: CacheManagerProps) {
                 >
                   <div className='min-w-0'>
                     <div className='truncate text-sm text-gray-800 dark:text-gray-200'>
-                      {ep.episodeKey}
+                      {formatEpisodeCacheLabel(ep)}
                     </div>
                     <div className='text-xs text-gray-500 dark:text-gray-400 mt-0.5'>
                       {ep.segments} 片段 · {formatBytes(ep.bytes)}

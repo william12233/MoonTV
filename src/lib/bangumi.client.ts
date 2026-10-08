@@ -23,12 +23,23 @@ export interface BangumiCalendarData {
 }
 
 export async function GetBangumiCalendarData(): Promise<BangumiCalendarData[]> {
-  const response = await fetch('https://api.bgm.tv/calendar');
-  const data = await response.json();
-  const filteredData = data.map((item: BangumiCalendarData) => ({
-    ...item,
-    items: item.items.filter(bangumiItem => bangumiItem.images)
-  }));
+  try {
+    const response = await fetch('https://api.bgm.tv/calendar');
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
 
-  return filteredData;
+    const data = await response.json();
+    if (!Array.isArray(data)) {
+      return [];
+    }
+
+    return data.map((item: BangumiCalendarData) => ({
+      ...item,
+      items: item.items.filter((bangumiItem) => bangumiItem.images),
+    }));
+  } catch (error) {
+    console.error('获取 Bangumi 日历失败:', error);
+    return [];
+  }
 }
