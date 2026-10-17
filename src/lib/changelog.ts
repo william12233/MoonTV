@@ -11,6 +11,24 @@ export interface ChangelogEntry {
 
 export const changelog: ChangelogEntry[] = [
   {
+    version: "4.3.0",
+    date: "2026-10-13",
+    added: [
+    "管理面板新增 Bangumi 数据代理与图片代理设置项",
+    "新增后端代理接口 `/api/bangumi/calendar`，由服务端转发 Bangumi API 请求并处理图片域名替换，前端不再直接暴露上游接口"
+    ],
+    changed: [
+    "新增环境变量 `NEXT_PUBLIC_BANGUMI_PROXY` 与 `NEXT_PUBLIC_BANGUMI_IMAGE_PROXY`，支持本地部署通过环境变量控制代理",
+    "添加弹幕限流机制以减少卡顿",
+    "首页海报图片请求改为站内代理",
+    "优化视频播放器加载遮罩图层",
+    "优化导航栏：采用等比例缩放"
+    ],
+    fixed: [
+    "修复主题切换按钮异常"
+    ]
+  },
+  {
     version: "4.2.5",
     date: "2026-10-06",
     added: [

@@ -9,6 +9,8 @@ export interface AdminConfig {
     DoubanProxy: string;
     DoubanImageProxyType: string;
     DoubanImageProxy: string;
+    BangumiProxy?: string;
+    BangumiImageProxy?: string;
     DisableYellowFilter: boolean;
     // 弹幕接口配置
     DanmakuApiBaseUrl?: string;

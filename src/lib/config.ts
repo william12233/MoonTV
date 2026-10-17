@@ -329,6 +329,9 @@ async function initConfig() {
             DoubanImageProxyType:
               process.env.NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE || 'direct',
             DoubanImageProxy: process.env.NEXT_PUBLIC_DOUBAN_IMAGE_PROXY || '',
+            BangumiProxy: process.env.NEXT_PUBLIC_BANGUMI_PROXY || '',
+            BangumiImageProxy:
+              process.env.NEXT_PUBLIC_BANGUMI_IMAGE_PROXY || '',
             DisableYellowFilter:
           process.env.NEXT_PUBLIC_DISABLE_YELLOW_FILTER === 'true',
             DanmakuApiBaseUrl:
@@ -392,6 +395,9 @@ async function initConfig() {
         DoubanImageProxyType:
           process.env.NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE || 'direct',
         DoubanImageProxy: process.env.NEXT_PUBLIC_DOUBAN_IMAGE_PROXY || '',
+        BangumiProxy: process.env.NEXT_PUBLIC_BANGUMI_PROXY || '',
+        BangumiImageProxy:
+          process.env.NEXT_PUBLIC_BANGUMI_IMAGE_PROXY || '',
         DisableYellowFilter:
           process.env.NEXT_PUBLIC_DISABLE_YELLOW_FILTER === 'true',
         DanmakuApiBaseUrl:
@@ -468,6 +474,12 @@ export async function getConfig(): Promise<AdminConfig> {
       adminConfig.SiteConfig.DoubanImageProxyType || process.env.NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE || 'direct';
     adminConfig.SiteConfig.DoubanImageProxy =
       adminConfig.SiteConfig.DoubanImageProxy || process.env.NEXT_PUBLIC_DOUBAN_IMAGE_PROXY || '';
+    adminConfig.SiteConfig.BangumiProxy =
+      adminConfig.SiteConfig.BangumiProxy || process.env.NEXT_PUBLIC_BANGUMI_PROXY || '';
+    adminConfig.SiteConfig.BangumiImageProxy =
+      adminConfig.SiteConfig.BangumiImageProxy ||
+      process.env.NEXT_PUBLIC_BANGUMI_IMAGE_PROXY ||
+      '';
     adminConfig.SiteConfig.DisableYellowFilter =
       typeof adminConfig.SiteConfig.DisableYellowFilter === 'boolean'
         ? adminConfig.SiteConfig.DisableYellowFilter
@@ -761,6 +773,9 @@ export async function resetConfig() {
       DoubanImageProxyType:
         process.env.NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE || 'direct',
       DoubanImageProxy: process.env.NEXT_PUBLIC_DOUBAN_IMAGE_PROXY || '',
+      BangumiProxy: process.env.NEXT_PUBLIC_BANGUMI_PROXY || '',
+      BangumiImageProxy:
+        process.env.NEXT_PUBLIC_BANGUMI_IMAGE_PROXY || '',
       DisableYellowFilter:
         process.env.NEXT_PUBLIC_DISABLE_YELLOW_FILTER === 'true',
         DanmakuApiBaseUrl:

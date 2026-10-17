@@ -27,11 +27,13 @@
 - ▶️ **流畅在线播放**：集成 HLS.js & ArtPlayer。
 - 📥 **视频下载**：支持 M3U8 视频下载，多线程并发加速，边下边存功能（Chrome/Edge）。
 - ❤️ **收藏 + 继续观看**：支持 Redis/Upstash 存储，多端同步进度。
+- 📺 **剧集追更**：一键追更正在更新的剧集，追更列表展示总集数与未看集数，支持流式批量刷新集数并展示「今日新更」。
 - 📱 **PWA**：离线缓存、安装到桌面/主屏，移动端原生体验。
 - 🌗 **响应式布局**：桌面侧边栏 + 移动底部导航，自适应各种屏幕尺寸。
 - 🚀 **极简部署**：一条 Docker 命令即可将完整服务跑起来，或免费部署到 Vercel、Netlify、cloudflare。
 - 👿 **智能去广告**：自动跳过视频中的切片广告（实验性）
 - 💬 **弹幕支持**：以[danmu_api](https://github.com/huangxd-/danmu_api)为后端, 需自行部署
+- 📅 **新番日历**：基于 Bangumi API 的每周新番放送时间表，无法加载可自行配置代理[bangumi-proxy](https://github.com/Yuri-NagaSaki/bangumi-proxy)
 
 ### 注意：部署后项目为空壳项目，无内置播放源，需要自行收集，需要弹幕请自行部署后端
 
@@ -307,6 +309,8 @@ services:
 | NEXT_PUBLIC_DOUBAN_PROXY            | 自定义豆瓣数据代理 URL                       | url prefix                       | (空)                                                                                                                       |
 | NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE | 豆瓣图片代理类型                             | 见下方                           | direct                                                                                                                     |
 | NEXT_PUBLIC_DOUBAN_IMAGE_PROXY      | 自定义豆瓣图片代理 URL                       | url prefix                       | (空)                                                                                                                       |
+| NEXT_PUBLIC_BANGUMI_PROXY           | 自定义 Bangumi 数据代理 URL，由后端代理请求   | url prefix                       | (空，留空使用官方 api.bgm.tv)                                                                                              |
+| NEXT_PUBLIC_BANGUMI_IMAGE_PROXY     | 自定义 Bangumi 图片代理域名，用于替换 lain.bgm.tv | url prefix                  | (空，留空不替换)                                                                                                           |
 | NEXT_PUBLIC_DISABLE_YELLOW_FILTER   | 关闭色情内容过滤                             | true/false                       | false                                                                                                                      |
 | NEXT_PUBLIC_DANMU_API_BASE_URL      | 弹幕接口地址                             | 接口地址                       | (空)                                                                                                                      |
 | NEXT_PUBLIC_PLAYBACK_SAVE_INTERVAL | 播放进度自动保存间隔（秒） | 正整数（建议 5-60，Upstash 建议 ≥20） | 按存储类型：Upstash 20 / 其余 5                                                             |

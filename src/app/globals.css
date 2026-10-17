@@ -1,153 +1,270 @@
+/*
+ * 弹性导航栏设计令牌
+ * 思路：导航栏是 <html> 的直属子级，直接相对视口宽度缩放最可靠。
+ * 这里用视口单位（vw）而非容器单位，避免 @container 嵌套失效问题。
+ * 所有值以 1280px 视口为基准换算成 vw，让元素尺寸随屏幕连续变化。
+ */
+:root {
+  --nav-h: 4.375vw;              /* 导航栏高度：56px @1280 → 84px @1920   */
+  --nav-px: 1.25vw;              /* 左右内边距：16px @1280 → 24px @1920   */
+  --nav-gap: 1.25vw;             /* 区块间距：16px @1280 → 24px @1920     */
+  --nav-link-gap: 0.78125vw;     /* 菜单项内间距：10px @1280 → 15px @1920  */
+  --nav-text: clamp(13px, 1.171875vw, 22.5px);   /* ★ 菜单字号带上下限   */
+  --nav-icon: clamp(15px, 1.40625vw, 27px);      /* ★ 图标带上下限      */
+  --nav-logo: clamp(18px, 1.875vw, 36px);        /* ★ Logo 带上下限      */
+  --nav-btn: clamp(30px, 2.5vw, 48px);           /* ★ 按钮带上下限      */
+
+  /* ★ 搜索栏：与视口等比缩放，clamp 保护下限 */
+  --nav-search-w: clamp(210px, 21.875vw, 420px);
+  --nav-search-h: clamp(36px, calc(var(--nav-h) * 0.64), 54px);
+
+  /* ★ 源选择器固定宽度：恒定不随内容变化 */
+  --nav-source-w: clamp(60px, calc(var(--nav-search-w) * 0.26), 104px);
+
+  /* ★ 字号 = 宽度的 5%，两者同边界 clamp，字宽比恒定 */
+  --nav-search-text: calc(var(--nav-search-w) * 0.05);
+}
+
+/* 窄屏下限保护 */
+@media (max-width: 1024px) {
+  :root {
+    --nav-h: 56px;
+    --nav-px: 12px;
+    --nav-gap: 8px;
+    --nav-link-gap: 6px;
+    --nav-text: 13px;
+    --nav-icon: 15px;
+    --nav-logo: 18px;
+    --nav-btn: 30px;
+    --nav-search-w: 210px;
+    --nav-search-h: 36px;
+    --nav-source-w: 60px;
+    --nav-search-text: 11px;
+  }
+}
+
+/* 超宽屏上限保护 */
+@media (min-width: 1920px) {
+  :root {
+    --nav-h: 84px;
+    --nav-px: 24px;
+    --nav-gap: 24px;
+    --nav-link-gap: 15px;
+    --nav-text: 22.5px;
+    --nav-icon: 27px;
+    --nav-logo: 36px;
+    --nav-btn: 48px;
+    --nav-search-w: 420px;
+    --nav-search-h: 54px;
+    --nav-source-w: 104px;
+    --nav-search-text: 20px;
+  }
+}
+
+/* ★ 源数量角标：绝对定位，脱离文档流，不参与按钮宽度计算 */
+.top-nav__source-count {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: #22c55e;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  pointer-events: none;   /* ★ 不阻挡点击齿轮按钮 */
+  z-index: 10;
+  box-shadow: 0 0 0 1.5px rgb(255 255 255 / 0.95);
+}
+.dark .top-nav__source-count {
+  box-shadow: 0 0 0 1.5px rgb(31 41 55 / 0.95);
+}
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer utilities {
   .scrollbar-hide {
-    -ms-overflow-style: none; /* IE and Edge */
-    scrollbar-width: none; /* Firefox */
+    scrollbar-width: none;
   }
-
   .scrollbar-hide::-webkit-scrollbar {
-    display: none; /* Chrome, Safari and Opera */
+    display: none;
   }
 }
 
-:root {
-  --foreground-rgb: 255, 255, 255;
+/* ★ 搜索区：flex 容器，源选择器与搜索框横向并排 */
+.top-nav__search {
+  width: var(--nav-search-w);
+  flex-shrink: 0;
+  display: flex;                  /* ★ 正常文档流 */
+  align-items: stretch;           /* ★ 子项等高 */
+  position: relative;
 }
 
-html,
-body {
+/* ★ 搜索框：flex-1 占满剩余空间 */
+.top-nav__searchbox {
+  flex: 1 1 auto;
+  height: var(--nav-search-h);
+  font-size: var(--nav-search-text);
+  min-width: 0;                   /* ★ 允许收缩，防止 flex 子项溢出 */
+  padding-left: 32px !important;  /* ★ 固定值，只给放大镜图标留位 */
+  padding-right: 32px !important;
+}
+
+.top-nav__search-icon {
+  width: var(--nav-icon);
+  height: var(--nav-icon);
+}
+
+.top-nav__searchbox::placeholder {
+  font-size: calc(var(--nav-search-text) - 1px);
+  color: rgb(156 163 175);
+}
+.dark .top-nav__searchbox::placeholder {
+  color: rgb(107 114 128);
+}
+
+/* ★ 刚性图标按钮：几何尺寸彻底锁死 */
+.top-nav__btn-rigid {
+  width: var(--nav-btn) !important;
+  height: var(--nav-btn) !important;
+  min-width: var(--nav-btn) !important;
+  max-width: var(--nav-btn) !important;
+  min-height: var(--nav-btn) !important;
+  max-height: var(--nav-btn) !important;
+  box-sizing: border-box !important;
+  flex-shrink: 0 !important;
+  flex-grow: 0 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  position: relative;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: transparent;
+}
+.top-nav__btn-rigid > svg {
+  width: var(--nav-icon);
+  height: var(--nav-icon);
+  flex-shrink: 0;
+}
+.top-nav__badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  flex-shrink: 0;
+  pointer-events: none;
+}
+
+/* 导航栏容器 */
+.top-nav { height: var(--nav-h); }
+.top-nav__inner {
+  width: 100%;
+  max-width: 100%;
+  height: 100%;
+  gap: var(--nav-gap);
+  padding-left: var(--nav-px);
+  padding-right: var(--nav-px);
+}
+.top-nav__menu { gap: var(--nav-link-gap); }
+.top-nav__link {
+  padding-left: var(--nav-link-gap);
+  padding-right: var(--nav-link-gap);
+  padding-top: calc(var(--nav-link-gap) * 0.6);
+  padding-bottom: calc(var(--nav-link-gap) * 0.6);
+  gap: var(--nav-link-gap);
+}
+.top-nav__text {
+  font-size: var(--nav-text);
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.top-nav__logo {
+  font-size: var(--nav-logo);
+  line-height: 1;
+}
+.top-nav__icon {
+  width: var(--nav-icon);
+  height: var(--nav-icon);
+  flex-shrink: 0;
+}
+.top-nav__btn {
+  width: var(--nav-btn);
+  height: var(--nav-btn);
+  padding: calc(var(--nav-btn) * 0.28);
+}
+.top-nav__actions {
+  gap: calc(var(--nav-gap) * 0.6);
+}
+
+@media (max-width: 1023px) {
+  .top-nav__text { display: none; }
+  .top-nav__link {
+    min-width: 36px;
+    min-height: 36px;
+    justify-content: center;
+  }
+}
+
+html, body {
   height: 100%;
   overflow-x: hidden;
-  /* 阻止 iOS Safari 拉动回弹 */
   overscroll-behavior: none;
 }
-
-body {
-  color: rgb(var(--foreground-rgb));
-}
-
+body { color: rgb(var(--foreground-rgb)); }
 html:not(.dark) body {
   background: linear-gradient(
     180deg,
-    #e6f3fb 0%,
-    #eaf3f7 18%,
-    #f7f7f3 38%,
-    #e9ecef 60%,
-    #dbe3ea 80%,
-    #d3dde6 100%
+    #e6f3fb 0%, #eaf3f7 18%, #f7f7f3 38%,
+    #e9ecef 60%, #dbe3ea 80%, #d3dde6 100%
   );
   background-attachment: fixed;
 }
-
-/* 自定义滚动条样式 */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-
-::-webkit-scrollbar-track {
-  background: rgba(31, 41, 55, 0.1);
-}
-
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: rgba(31, 41, 55, 0.1); }
 ::-webkit-scrollbar-thumb {
   background: rgba(75, 85, 99, 0.3);
   border-radius: 4px;
 }
-
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(107, 114, 128, 0.5);
-}
-
-/* 视频卡片悬停效果 */
-.video-card-hover {
-  transition: transform 0.3s ease;
-}
-
-.video-card-hover:hover {
-  transform: scale(1.05);
-}
-
-/* 渐变遮罩 */
+::-webkit-scrollbar-thumb:hover { background: rgba(107, 114, 128, 0.5); }
+.video-card-hover { transition: transform 0.3s ease; }
+.video-card-hover:hover { transform: scale(1.05); }
 .gradient-overlay {
-  background: linear-gradient(
-    to bottom,
-    rgba(0, 0, 0, 0) 0%,
-    rgba(0, 0, 0, 0.8) 100%
-  );
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.8) 100%);
 }
-
-/* 隐藏移动端（<768px）垂直滚动条 */
 @media (max-width: 767px) {
-  html,
-  body {
-    -ms-overflow-style: none; /* IE & Edge */
-    scrollbar-width: none; /* Firefox */
-  }
-
-  html::-webkit-scrollbar,
-  body::-webkit-scrollbar {
-    display: none; /* Chrome Safari */
-  }
+  html, body { scrollbar-width: none; }
+  html::-webkit-scrollbar, body::-webkit-scrollbar { display: none; }
 }
-
-/* View Transitions API 动画 - 整体渐变模式 */
-@keyframes fade-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-@keyframes fade-out {
-  from {
-    opacity: 1;
-  }
-  to {
-    opacity: 0;
-  }
-}
-
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes fade-out { from { opacity: 1; } to { opacity: 0; } }
 ::view-transition-old(root),
 ::view-transition-new(root) {
   animation-duration: 0.6s;
   animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
   animation-fill-mode: both;
 }
-
-/*
-  整体渐变模式：旧视图淡出，新视图淡入
-*/
-::view-transition-old(root) {
-  animation-name: fade-out;
-}
-
-::view-transition-new(root) {
-  animation-name: fade-in;
-}
-
-/* 强制播放器内部的 video 元素高度为 100%，并保持内容完整显示 */
+::view-transition-old(root) { animation-name: fade-out; }
+::view-transition-new(root) { animation-name: fade-in; }
 div[data-media-provider] video {
   height: 100%;
   object-fit: contain;
 }
-
 .art-poster {
-  background-size: contain !important; /* 使图片完整展示 */
-  background-position: center center !important; /* 居中显示 */
-  background-repeat: no-repeat !important; /* 防止重复 */
-  background-color: #000 !important; /* 其余区域填充为黑色 */
+  background-size: contain !important;
+  background-position: center center !important;
+  background-repeat: no-repeat !important;
+  background-color: #000 !important;
 }
-
-/* 播放器内顶栏：和底部控制栏同步显隐，锁屏时一并藏起 */
 .art-video-player .moontv-play-header {
   transition: opacity 0.2s ease, visibility 0.2s ease;
 }
-
 .art-video-player:not(.art-control-show):not(.art-hover) .moontv-play-header,
 .art-video-player.art-hide-cursor .moontv-play-header,
 .art-video-player.art-lock .moontv-play-header {
@@ -155,26 +272,14 @@ div[data-media-provider] video {
   visibility: hidden;
   pointer-events: none !important;
 }
-
-/* 全屏时 fixed 会相对播放器（或被 transform 限制），改成铺满播放器本身 */
 .art-video-player:fullscreen .moontv-player-modal > div,
 .art-video-player:-webkit-full-screen .moontv-player-modal > div,
 .art-video-player.art-fullscreen-web .moontv-player-modal > div,
 .art-video-player.art-fullscreen .moontv-player-modal > div {
   position: absolute;
 }
-
-/* 隐藏移动端竖屏时的 pip 按钮 */
 @media (max-width: 768px) {
-  .art-control-pip {
-    display: none !important;
-  }
-
-  .art-control-fullscreenWeb {
-    display: none !important;
-  }
-
-  .art-control-volume {
-    display: none !important;
-  }
+  .art-control-pip,
+  .art-control-fullscreenWeb,
+  .art-control-volume { display: none !important; }
 }

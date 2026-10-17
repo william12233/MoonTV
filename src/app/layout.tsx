@@ -60,6 +60,9 @@ export default async function RootLayout({
   let doubanImageProxyType =
     process.env.NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE || 'direct';
   let doubanImageProxy = process.env.NEXT_PUBLIC_DOUBAN_IMAGE_PROXY || '';
+  let bangumiProxy = process.env.NEXT_PUBLIC_BANGUMI_PROXY || '';
+  let bangumiImageProxy =
+    process.env.NEXT_PUBLIC_BANGUMI_IMAGE_PROXY || '';
   let disableYellowFilter =
     process.env.NEXT_PUBLIC_DISABLE_YELLOW_FILTER === 'true';
   let danmakuApiBaseUrl =
@@ -78,6 +81,9 @@ export default async function RootLayout({
     doubanProxy = config.SiteConfig.DoubanProxy;
     doubanImageProxyType = config.SiteConfig.DoubanImageProxyType;
     doubanImageProxy = config.SiteConfig.DoubanImageProxy;
+    bangumiProxy = config.SiteConfig.BangumiProxy || bangumiProxy;
+    bangumiImageProxy =
+      config.SiteConfig.BangumiImageProxy || bangumiImageProxy;
     disableYellowFilter = config.SiteConfig.DisableYellowFilter;
     danmakuApiBaseUrl =
       config.SiteConfig.DanmakuApiBaseUrl || danmakuApiBaseUrl;
@@ -98,6 +104,8 @@ export default async function RootLayout({
     DOUBAN_PROXY: doubanProxy,
     DOUBAN_IMAGE_PROXY_TYPE: doubanImageProxyType,
     DOUBAN_IMAGE_PROXY: doubanImageProxy,
+    BANGUMI_PROXY: bangumiProxy,
+    BANGUMI_IMAGE_PROXY: bangumiImageProxy,
     DISABLE_YELLOW_FILTER: disableYellowFilter,
     DANMU_API_BASE_URL: danmakuApiBaseUrl,
     PLAYBACK_SAVE_INTERVAL: playbackSaveInterval,
