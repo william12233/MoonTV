@@ -1,6 +1,7 @@
 'use client';
-import { ChevronDown, Save, Settings, X } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { Save, Settings, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import Swal from 'sweetalert2';
 
 import { getAvailableApiSitesClient } from '@/lib/config.client';
@@ -27,10 +28,6 @@ export default function SourceSelector({
   const [enableSearchSuggestions, setEnableSearchSuggestions] = useState<boolean>(true);
 
   const open = openFilter === 'sources';
-
-  const [popupStyles, setPopupStyles] = useState<React.CSSProperties>({});
-  const buttonRef = useRef<HTMLButtonElement>(null);
-  const popupRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -126,74 +123,52 @@ export default function SourceSelector({
     }
   }, [availableSources, onChange]);
 
-  useEffect(() => {
-    if (open && buttonRef.current && popupRef.current) {
-      const btnRect = buttonRef.current.getBoundingClientRect();
-      const screenWidth = window.innerWidth;
-
-      let left = btnRect.left;
-      const top = btnRect.bottom + 4;
-      const width = Math.min(screenWidth - 16, 400);
-
-      if (left + width > screenWidth - 8) {
-        left = Math.max(8, screenWidth - width - 8);
-      }
-
-      setPopupStyles({ left, top, width });
-    }
-  }, [open]);
-
-  const heightClass = size === 'compact' ? 'h-10' : 'h-12';
+  // 紧凑版用于导航栏，尺寸由 CSS 设计令牌控制，随导航栏等比缩放
+  const isCompact = size === 'compact';
+  const baseButtonClass = isCompact
+    ? 'top-nav__source-btn flex items-center font-medium'
+    : 'flex items-center px-3 h-12 font-medium';
+  const iconClass = isCompact ? undefined : 'w-4 h-4';
 
   if (isLoading) {
     return (
       <div className='relative inline-flex items-center'>
         <div className='flex items-center bg-gray-200 dark:bg-gray-700 rounded-l-lg overflow-hidden'>
-          <button
-            className={`flex items-center gap-1 px-3 ${heightClass} text-sm font-medium opacity-50`}
-            disabled
-          >
-            <Settings className='w-4 h-4' />
-            <ChevronDown className='w-4 h-4' />
+          <button className={`${baseButtonClass} opacity-50`} disabled>
+            <Settings className={iconClass} />
           </button>
         </div>
       </div>
     );
   }
 
-  return (
-    <div className='relative inline-flex items-center'>
-      {/* ★ 按钮内部只保留齿轮 + 箭头，宽度完全固定 */}
-      <div className='flex items-center bg-gray-200 dark:bg-gray-700 rounded-l-lg overflow-hidden'>
-        <button
-          ref={buttonRef}
-          onClick={toggleOpen}
-          className={`flex items-center gap-1 px-3 ${heightClass} text-sm font-medium hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors`}
-        >
-          <Settings className='w-4 h-4' />
-          <ChevronDown className={`w-4 h-4 transition-transform ${open ? 'rotate-180' : 'rotate-0'}`} />
-        </button>
-      </div>
+  // 设置弹窗：Portal 到 body，避免导航栏的 backdrop-filter 影响 fixed 定位
+  const settingsModal = (
+    <div
+      data-source-settings-modal
+      className='fixed inset-0 z-[1000] flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm'
+      onClick={() => setOpenFilter(null)}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className='flex max-h-[80vh] w-full max-w-lg flex-col overflow-hidden rounded-xl bg-white shadow-xl dark:bg-gray-800'
+      >
+        {/* 标题栏 */}
+        <div className='flex items-center justify-between border-b border-gray-200 p-4 dark:border-gray-700'>
+          <h3 className='text-lg font-semibold text-gray-900 dark:text-gray-100'>
+            搜索源设置
+          </h3>
+          <button
+            onClick={() => setOpenFilter(null)}
+            className='rounded p-1 transition-colors hover:bg-gray-100 dark:hover:bg-gray-700'
+            aria-label='关闭'
+          >
+            <X className='h-5 w-5 text-gray-500 dark:text-gray-400' />
+          </button>
+        </div>
 
-      {/* ★ 数量以角标形式呈现：绝对定位在齿轮右上角，不占按钮宽度 */}
-      {selectedSources.length > 0 && (
-        <span className='top-nav__source-count'>
-          {selectedSources.length > 99 ? '99+' : selectedSources.length}
-        </span>
-      )}
-
-      {open && (
-        <div
-          ref={popupRef}
-          style={popupStyles}
-          className='
-            fixed z-50
-            bg-white dark:bg-gray-800
-            border border-gray-200 dark:border-gray-700
-            rounded-lg shadow-lg p-4
-            max-h-[50vh] overflow-auto
-          '
-        >
+        {/* 内容区 */}
+        <div className='overflow-y-auto p-4'>
           <div
             className='mb-3 grid gap-2'
             style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))' }}
@@ -278,7 +253,31 @@ export default function SourceSelector({
             </div>
           )}
         </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className='relative inline-flex items-center'>
+      {/* ★ 按钮内部只保留齿轮，宽度完全固定 */}
+      <div className='flex items-center bg-gray-200 dark:bg-gray-700 rounded-l-lg overflow-hidden'>
+        <button
+          onClick={toggleOpen}
+          className={`${baseButtonClass} hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors`}
+          title='搜索源设置'
+        >
+          <Settings className={iconClass} />
+        </button>
+      </div>
+
+      {/* ★ 数量以角标形式呈现：绝对定位在齿轮右上角，不占按钮宽度 */}
+      {selectedSources.length > 0 && (
+        <span className='top-nav__source-count'>
+          {selectedSources.length > 99 ? '99+' : selectedSources.length}
+        </span>
       )}
+
+      {open && createPortal(settingsModal, document.body)}
     </div>
   );
 }

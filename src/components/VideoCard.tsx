@@ -3,7 +3,7 @@
 import { ExternalLink, Heart, Link, PlayCircleIcon, Trash2 } from 'lucide-react';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   deleteFavorite,
@@ -75,7 +75,18 @@ export default function VideoCard({
   const [favoriteChecked, setFavoriteChecked] = useState(false); // 是否已经检查过收藏状态
   const [followingChecked, setFollowingChecked] = useState(false); // 是否已经检查过追更状态
   const [isActionOpen, setIsActionOpen] = useState(false);
-  const [longPressTimer, setLongPressTimer] = useState<number | null>(null);
+  const longPressTimer = useRef<number | null>(null);
+  const touchStart = useRef<{ x: number; y: number } | null>(null);
+  const suppressContextMenuUntil = useRef(0);
+
+  const cancelLongPress = useCallback(() => {
+    if (longPressTimer.current !== null) {
+      window.clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  }, []);
+
+  useEffect(() => cancelLongPress, [cancelLongPress]);
 
   const isAggregate = from === 'search' && !!items?.length;
 
@@ -265,49 +276,45 @@ export default function VideoCard({
     [from, actualSource, actualId, onDelete]
   );
 
-  const handleClick = useCallback(() => {
-    // 点击时不再检查收藏状态
-    // 触发加载动画
-    startLoading();
-
-    if (from === 'douban') {
-      router.push(
-        `/play?title=${encodeURIComponent(actualTitle.trim())}${
-          sanitizedYear ? `&year=${sanitizedYear}` : ''
-        }${actualSearchType ? `&stype=${actualSearchType}` : ''}`
-      );
-    } else if (actualSource && actualId) {
-      // 携带当前播放集数（1 基）：追更页传的是按标题匹配得到的当前集数，
-      // 播放页挂载时优先采用该集数开始播放，避免因换片源导致 source+id 记录缺失而回到第 1 集
-      const startEp =
-        typeof currentEpisode === 'number' &&
-        Number.isInteger(currentEpisode) &&
-        currentEpisode >= 1
-          ? `&ep=${currentEpisode}`
-          : '';
-      router.push(
-        `/play?source=${actualSource}&id=${actualId}&title=${encodeURIComponent(
-          actualTitle
-        )}${sanitizedYear ? `&year=${sanitizedYear}` : ''}${
-          isAggregate ? '&prefer=true' : ''
-        }${
-          sanitizedQuery ? `&stitle=${encodeURIComponent(sanitizedQuery)}` : ''
-        }${actualSearchType ? `&stype=${actualSearchType}` : ''}${startEp}`
-      );
+  const playbackUrl = useMemo(() => {
+    if (from !== 'douban' && (!actualSource || !actualId)) return '';
+    const params = new URLSearchParams();
+    if (from !== 'douban' && actualSource && actualId) {
+      params.set('source', actualSource);
+      params.set('id', actualId);
     }
+    params.set('title', actualTitle.trim());
+    if (sanitizedYear) params.set('year', sanitizedYear);
+    if (actualSearchType) params.set('stype', actualSearchType);
+    if (from !== 'search' && from !== 'douban' && sanitizedQuery) {
+      params.set('stitle', sanitizedQuery);
+    }
+    // Preserve resume positions for history and following cards.
+    if (
+      from !== 'douban' &&
+      typeof currentEpisode === 'number' &&
+      Number.isInteger(currentEpisode) &&
+      currentEpisode >= 1
+    ) {
+      params.set('ep', String(currentEpisode));
+    }
+    return `/play?${params.toString()}`;
   }, [
     from,
     actualSource,
     actualId,
-    router,
     actualTitle,
     sanitizedYear,
-    isAggregate,
     sanitizedQuery,
     actualSearchType,
-    startLoading,
     currentEpisode,
   ]);
+
+  const handleClick = useCallback(() => {
+    if (!playbackUrl) return;
+    startLoading();
+    router.push(playbackUrl);
+  }, [playbackUrl, router, startLoading]);
 
   const config = useMemo(() => {
     const configs = {
@@ -363,29 +370,48 @@ export default function VideoCard({
       onContextMenu={(e) => {
         e.preventDefault();
         e.stopPropagation();
+        // Touch menus are handled by the stationary long-press timer only.
+        if (Date.now() < suppressContextMenuUntil.current) return;
+        cancelLongPress();
         setIsActionOpen(true);
+      }}
+      onMouseDown={() => {
+        suppressContextMenuUntil.current = 0;
       }}
       onTouchStart={(e) => {
         e.stopPropagation();
-        if (longPressTimer) {
-          window.clearTimeout(longPressTimer);
-        }
-        const timerId = window.setTimeout(() => {
+        cancelLongPress();
+        touchStart.current = null;
+        suppressContextMenuUntil.current = Infinity;
+        if (e.touches.length !== 1) return;
+        const touch = e.touches[0];
+        touchStart.current = { x: touch.clientX, y: touch.clientY };
+        longPressTimer.current = window.setTimeout(() => {
+          longPressTimer.current = null;
           setIsActionOpen(true);
         }, 500);
-        setLongPressTimer(timerId);
+      }}
+      onTouchMove={(e) => {
+        const start = touchStart.current;
+        if (!start) return;
+        const touch = e.touches[0];
+        if (
+          e.touches.length !== 1 ||
+          Math.hypot(touch.clientX - start.x, touch.clientY - start.y) > 8
+        ) {
+          cancelLongPress();
+          touchStart.current = null;
+        }
       }}
       onTouchEnd={() => {
-        if (longPressTimer) {
-          window.clearTimeout(longPressTimer);
-          setLongPressTimer(null);
-        }
+        cancelLongPress();
+        touchStart.current = null;
+        suppressContextMenuUntil.current = Date.now() + 800;
       }}
       onTouchCancel={() => {
-        if (longPressTimer) {
-          window.clearTimeout(longPressTimer);
-          setLongPressTimer(null);
-        }
+        cancelLongPress();
+        touchStart.current = null;
+        suppressContextMenuUntil.current = Date.now() + 800;
       }}
       onMouseEnter={() => {
           // 收藏夹里的卡片在该分支下默认已收藏，但仍需保持与首页/历史一致的追更状态检查
@@ -639,32 +665,7 @@ export default function VideoCard({
             icon: <ExternalLink size={20} />,
             color: 'default',
             onClick: () => {
-              if (from === 'douban') {
-                window.open(
-                  `/play?title=${encodeURIComponent(actualTitle.trim())}${
-                    actualYear ? `&year=${actualYear}` : ''
-                  }${actualSearchType ? `&stype=${actualSearchType}` : ''}`,
-                  '_blank'
-                );
-              } else if (actualSource && actualId) {
-                // 与主点击一致：携带当前播放集数（1 基）
-                const newTabStartEp =
-                  typeof currentEpisode === 'number' &&
-                  Number.isInteger(currentEpisode) &&
-                  currentEpisode >= 1
-                    ? `&ep=${currentEpisode}`
-                    : '';
-                window.open(
-                  `/play?source=${actualSource}&id=${actualId}&title=${encodeURIComponent(
-                    actualTitle
-                  )}${actualYear ? `&year=${actualYear}` : ''}${
-                    isAggregate ? '&prefer=true' : ''
-                  }${
-                    actualQuery ? `&stitle=${encodeURIComponent(actualQuery.trim())}` : ''
-                  }${actualSearchType ? `&stype=${actualSearchType}` : ''}${newTabStartEp}`,
-                  '_blank'
-                );
-              }
+              if (playbackUrl) window.open(playbackUrl, '_blank');
             },
           },
           ...(from !== 'douban' && !(from === 'search' && isAggregate) && actualSource && actualId

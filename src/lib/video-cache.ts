@@ -10,6 +10,8 @@
  *   3. 跨域片段经 SW 拦截拿到的是 opaque response，cache.put 存不了内容。
  */
 
+import { type SegmentByteRange } from './video-byte-range';
+
 /** 片段响应体的 Cache Storage 桶名 */
 export const VIDEO_CACHE_NAME = 'moontv-video-v1';
 
@@ -30,6 +32,9 @@ export interface SegmentMeta {
   source?: string;
   /** 片段序号（1 基，便于排查） */
   index: number;
+  /** 片段在视频中的实际起止时间（秒），旧缓存可能没有 */
+  startTime?: number;
+  endTime?: number;
   /** 字节数 */
   bytes: number;
   /** 预取时的实际耗时(ms)，用于给 hls.js 合成 LoaderStats，避免 ABR 高估带宽 */
@@ -47,9 +52,38 @@ export interface SegmentMeta {
  */
 export const UNLIMITED_HORIZON_SECONDS = 0;
 
+/** 缓存并发档位：只提供低/中/高三档，不开放任意数值 */
+export type CacheConcurrencyMode = 'low' | 'medium' | 'high';
+
+/**
+ * 档位与分片并发数的对应关系（设置界面与调度器共用同一份定义）。
+ *
+ * 取值依据（采集站 HLS 的实际分布：分片 0.5–5 MB，偶尔到 8–12 MB；
+ * 1080p 常见码率 2.5–6 Mbps，分片 4–10 s）：
+ *
+ * - 预取只需追上播放码率（1080p ≈ 0.6 MB/s），2 路就能覆盖实时预取，
+ *   所以低档取 2，给弱网/省流留一档不抢带宽的选择；
+ * - 中档 4 路是日常默认：按单分片 3 MB、单请求 ~0.6 s 计，
+ *   4 路 ≈ 20 MB/s，一部 40 分钟、2.25 GB 的 1080p 约 2 分钟补齐视野，
+ *   同时不会让播放器的 hls 请求排在大量预取后面；
+ * - 高档 8 路用于批量预热：8 路足以跑满 50–100 Mbps 的家用带宽，
+ *   再往上只是把 0.5–5 MB 的小分片堆成排队，收益递减而尾延迟变差。
+ */
+export const CACHE_CONCURRENCY_PRESETS: Record<CacheConcurrencyMode, number> = {
+  low: 2,
+  medium: 4,
+  high: 8,
+};
+
 export interface CacheSettings {
   /** 总开关 */
   enabled: boolean;
+  /** 切换集数或换片时清理缓存，保留当前集与下一集预热 */
+  autoClearOnEpisodeChange: boolean;
+  /** 分片下载并发数，由 concurrencyMode 决定（2 / 4 / 8），只读派生值 */
+  concurrency: number;
+  /** 并发档位 */
+  concurrencyMode: CacheConcurrencyMode;
   /**
    * 前向缓存目标时长（秒）。
    *
@@ -60,12 +94,15 @@ export interface CacheSettings {
   maxBytesPerEpisode: number;
   /** 全部缓存最大占用（字节） */
   maxTotalBytes: number;
-  /** 是否走 /api/m3u8 同源代理（false 时直接缓存源站绝对 URL） */
+  /** 直连失败时是否允许同源代理兜底；同时决定缓存键格式以兼容旧缓存 */
   useProxy: boolean;
 }
 
 export const DEFAULT_CACHE_SETTINGS: CacheSettings = {
   enabled: false,
+  autoClearOnEpisodeChange: false,
+  concurrency: CACHE_CONCURRENCY_PRESETS.low,
+  concurrencyMode: 'low',
   // 默认不设时间上限：暂停后一直往后缓存，直到片尾或触发字节上限淘汰
   horizonSeconds: UNLIMITED_HORIZON_SECONDS,
   maxBytesPerEpisode: 800 * 1024 * 1024,
@@ -73,7 +110,11 @@ export const DEFAULT_CACHE_SETTINGS: CacheSettings = {
   useProxy: true,
 };
 
-function clampNumber(value: unknown, min: number, max: number): number | undefined {
+function clampNumber(
+  value: unknown,
+  min: number,
+  max: number
+): number | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
   return Math.min(max, Math.max(min, value));
 }
@@ -93,6 +134,47 @@ export function loadCacheSettings(): CacheSettings {
   }
 }
 
+/** 把任意并发数收敛到最接近的预设档位 */
+export function closestConcurrencyMode(value: number): CacheConcurrencyMode {
+  const modes: CacheConcurrencyMode[] = ['low', 'medium', 'high'];
+  let best: CacheConcurrencyMode = modes[0];
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const mode of modes) {
+    const distance = Math.abs(CACHE_CONCURRENCY_PRESETS[mode] - value);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = mode;
+    }
+  }
+  return best;
+}
+
+/**
+ * 解析并发档位。
+ *
+ * 旧版本支持"自定义并发"，存量配置里可能是 `concurrencyMode: 'custom'`
+ * 加一个 `customConcurrency`（也可能是更早的只存 `concurrency`）。
+ * 现在只保留三档预设，这些历史值一律按最接近的档位收敛，
+ * 保证升级后不会因为字段缺失回落到 1 路。
+ */
+function normalizeConcurrencyMode(
+  raw: Record<string, unknown>
+): CacheConcurrencyMode {
+  const mode = raw.concurrencyMode;
+  if (mode === 'low' || mode === 'medium' || mode === 'high') return mode;
+  if (mode !== undefined && mode !== 'custom') {
+    return DEFAULT_CACHE_SETTINGS.concurrencyMode;
+  }
+  const legacy = clampNumber(
+    raw.customConcurrency ?? raw.concurrency,
+    1,
+    Number.MAX_SAFE_INTEGER
+  );
+  return legacy === undefined
+    ? DEFAULT_CACHE_SETTINGS.concurrencyMode
+    : closestConcurrencyMode(legacy);
+}
+
 /** 对可能不可信的配置做字段级校验，避免脏数据导致配额失控 */
 export function normalizeCacheSettings(input: unknown): CacheSettings {
   if (!input || typeof input !== 'object') return DEFAULT_CACHE_SETTINGS;
@@ -101,19 +183,37 @@ export function normalizeCacheSettings(input: unknown): CacheSettings {
   const settings: CacheSettings = { ...DEFAULT_CACHE_SETTINGS };
 
   if (typeof raw.enabled === 'boolean') settings.enabled = raw.enabled;
+  if (typeof raw.autoClearOnEpisodeChange === 'boolean') {
+    settings.autoClearOnEpisodeChange = raw.autoClearOnEpisodeChange;
+  }
   if (typeof raw.useProxy === 'boolean') settings.useProxy = raw.useProxy;
+
+  // 并发只能来自三档预设，写入端的 concurrency 字段被忽略并重新派生。
+  settings.concurrencyMode = normalizeConcurrencyMode(raw);
+  settings.concurrency = CACHE_CONCURRENCY_PRESETS[settings.concurrencyMode];
 
   const horizon = clampNumber(raw.horizonSeconds, 0, 7200);
   if (horizon !== undefined) {
     // 0 是「无限」哨兵，必须原样保留；其余值低于 1 分钟没有意义，抬到 60s
     settings.horizonSeconds =
-      horizon === 0 ? UNLIMITED_HORIZON_SECONDS : Math.max(60, Math.round(horizon));
+      horizon === 0
+        ? UNLIMITED_HORIZON_SECONDS
+        : Math.max(60, Math.round(horizon));
   }
 
-  const perEpisode = clampNumber(raw.maxBytesPerEpisode, 50 * 1024 * 1024, 8 * 1024 ** 3);
-  if (perEpisode !== undefined) settings.maxBytesPerEpisode = Math.round(perEpisode);
+  const perEpisode = clampNumber(
+    raw.maxBytesPerEpisode,
+    50 * 1024 * 1024,
+    8 * 1024 ** 3
+  );
+  if (perEpisode !== undefined)
+    settings.maxBytesPerEpisode = Math.round(perEpisode);
 
-  const total = clampNumber(raw.maxTotalBytes, 100 * 1024 * 1024, 20 * 1024 ** 3);
+  const total = clampNumber(
+    raw.maxTotalBytes,
+    100 * 1024 * 1024,
+    20 * 1024 ** 3
+  );
   if (total !== undefined) settings.maxTotalBytes = Math.round(total);
 
   if (settings.maxBytesPerEpisode > settings.maxTotalBytes) {
@@ -158,7 +258,17 @@ function openMetaDb(): Promise<IDBDatabase> {
       }
     };
 
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      const db = request.result;
+      db.onversionchange = () => {
+        db.close();
+        dbPromise = null;
+      };
+      db.onclose = () => {
+        dbPromise = null;
+      };
+      resolve(db);
+    };
     request.onerror = () => reject(request.error);
   });
 
@@ -179,7 +289,13 @@ function runTx<T>(
       new Promise<T>((resolve, reject) => {
         const transaction = db.transaction(META_STORE, mode);
         const request = fn(transaction.objectStore(META_STORE));
-        request.onsuccess = () => resolve(request.result as T);
+        // Request success precedes commit; a transaction may still abort.
+        transaction.oncomplete = () => resolve(request.result as T);
+        transaction.onabort = () =>
+          reject(
+            transaction.error || new Error('Metadata transaction aborted')
+          );
+        transaction.onerror = () => reject(transaction.error);
         request.onerror = () => reject(request.error);
       })
   );
@@ -190,7 +306,9 @@ export const metaStore = {
     return runTx<void>('readwrite', (store) => store.put(record));
   },
   get(key: string): Promise<SegmentMeta | undefined> {
-    return runTx<SegmentMeta | undefined>('readonly', (store) => store.get(key));
+    return runTx<SegmentMeta | undefined>('readonly', (store) =>
+      store.get(key)
+    );
   },
   del(key: string): Promise<void> {
     return runTx<void>('readwrite', (store) => store.delete(key));
@@ -216,6 +334,9 @@ export async function touchMeta(key: string): Promise<void> {
     return previous !== undefined && now - previous < TOUCH_INTERVAL_MS;
   });
   if (throttled) return;
+  for (const [entry, touchedAt] of Array.from(lastTouchAt)) {
+    if (now - touchedAt >= TOUCH_INTERVAL_MS) lastTouchAt.delete(entry);
+  }
   variants.forEach((v) => lastTouchAt.set(v, now));
 
   try {
@@ -254,13 +375,17 @@ export async function openVideoCache(): Promise<Cache | null> {
  * 解决 cache.put 写入时某些浏览器自动把相对路径补成带 origin 的绝对 URL，
  * 导致读取侧用相对路径查不到的问题。
  */
-function getCacheKeyVariants(key: string): string[] {
+export function getCacheKeyVariants(key: string): string[] {
   const variants: string[] = [key];
   try {
     if (typeof location !== 'undefined') {
       const origin = location.origin;
       // 传入 key 是相对路径（以 / 开头，不是 //，不是 http...）
-      if (key.startsWith('/') && !key.startsWith('//') && !/^https?:/i.test(key)) {
+      if (
+        key.startsWith('/') &&
+        !key.startsWith('//') &&
+        !/^https?:/i.test(key)
+      ) {
         const abs = `${origin}${key}`;
         if (abs !== key) variants.push(abs);
       } else {
@@ -293,7 +418,8 @@ export async function hasCachedSegment(key: string): Promise<boolean> {
 
 /** 申请持久化存储，降低磁盘紧张时被浏览器整块清理的概率 */
 export async function ensurePersistentStorage(): Promise<boolean> {
-  if (typeof navigator === 'undefined' || !navigator.storage?.persist) return false;
+  if (typeof navigator === 'undefined' || !navigator.storage?.persist)
+    return false;
   try {
     if (await navigator.storage.persisted()) return true;
     return await navigator.storage.persist();
@@ -309,7 +435,8 @@ export interface CacheStorageEstimate {
 }
 
 export async function estimateStorage(): Promise<CacheStorageEstimate | null> {
-  if (typeof navigator === 'undefined' || !navigator.storage?.estimate) return null;
+  if (typeof navigator === 'undefined' || !navigator.storage?.estimate)
+    return null;
   try {
     const { usage = 0, quota = 0 } = await navigator.storage.estimate();
     return { usage, quota, ratio: quota > 0 ? usage / quota : 0 };
@@ -413,26 +540,62 @@ export async function enforceQuota(
   if (victims.size === 0) return 0;
 
   let removed = 0;
-  await Promise.all(
-    Array.from(victims).map(async (key) => {
-      try {
-        if (await cache.delete(key)) removed += 1;
-      } catch {
-        // ignore
-      }
-      try {
-        await metaStore.del(key);
-      } catch {
-        // ignore
-      }
-      lastTouchAt.delete(key);
-    })
-  );
+  const victimKeys = Array.from(victims);
+  // Bound storage work instead of opening a transaction for every victim at once.
+  for (let offset = 0; offset < victimKeys.length; offset += 8) {
+    await Promise.all(
+      victimKeys.slice(offset, offset + 8).map(async (key) => {
+        try {
+          if (await cache.delete(key)) removed += 1;
+        } catch {
+          // ignore
+        }
+        try {
+          await metaStore.del(key);
+        } catch {
+          // ignore
+        }
+        lastTouchAt.delete(key);
+      })
+    );
+    if (offset + 8 < victimKeys.length) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    }
+  }
 
   return removed;
 }
 
-export async function clearVideoCache(): Promise<void> {
+export async function clearVideoCache(
+  keepEpisodeKeys: readonly string[] = []
+): Promise<void> {
+  if (keepEpisodeKeys.length > 0) {
+    const keep = new Set(keepEpisodeKeys);
+    const records = await metaStore.all();
+    const preservedKeys = new Set(
+      records
+        .filter((record) => keep.has(record.episodeKey))
+        .flatMap((record) => getCacheKeyVariants(record.key))
+    );
+    const cache = await openVideoCache();
+    if (cache) {
+      const requests = await cache.keys();
+      await Promise.all(
+        requests
+          .filter((request) => !preservedKeys.has(request.url))
+          .map((request) => cache.delete(request))
+      );
+    }
+    await Promise.all(
+      records
+        .filter((record) => !keep.has(record.episodeKey))
+        .map(async (record) => {
+          await metaStore.del(record.key);
+          lastTouchAt.delete(record.key);
+        })
+    );
+    return;
+  }
   try {
     await caches.delete(VIDEO_CACHE_NAME);
   } catch {
@@ -480,21 +643,96 @@ export interface EpisodeCacheStat {
   lastAccess: number;
 }
 
+export interface CachedTimeRange {
+  startTime: number;
+  endTime: number;
+  firstIndex: number;
+  lastIndex: number;
+}
+
+/** 合并相邻或重叠的实际时间段，不把未缓存的间隙计入覆盖时长。 */
+export function mergeCachedTimeRanges(
+  records: Pick<SegmentMeta, 'index' | 'startTime' | 'endTime'>[]
+): CachedTimeRange[] {
+  const sorted = records
+    .filter(
+      (
+        record
+      ): record is { index: number; startTime: number; endTime: number } =>
+        typeof record.startTime === 'number' &&
+        typeof record.endTime === 'number' &&
+        Number.isFinite(record.startTime) &&
+        Number.isFinite(record.endTime) &&
+        record.startTime >= 0 &&
+        record.endTime > record.startTime
+    )
+    .sort((a, b) => a.startTime - b.startTime);
+  const ranges: CachedTimeRange[] = [];
+  for (const record of sorted) {
+    const previous = ranges[ranges.length - 1];
+    if (previous && record.startTime <= previous.endTime + 0.001) {
+      previous.endTime = Math.max(previous.endTime, record.endTime);
+      previous.firstIndex = Math.min(previous.firstIndex, record.index);
+      previous.lastIndex = Math.max(previous.lastIndex, record.index);
+    } else {
+      ranges.push({
+        startTime: record.startTime,
+        endTime: record.endTime,
+        firstIndex: record.index,
+        lastIndex: record.index,
+      });
+    }
+  }
+  return ranges;
+}
+
+/** 只返回仍存在于 Cache Storage 的元数据，排除已淘汰或被清空的片段。 */
+export async function getCachedSegmentRecords(): Promise<SegmentMeta[]> {
+  const cache = await openVideoCache();
+  if (!cache) return [];
+  const [records, requests] = await Promise.all([
+    metaStore.all(),
+    cache.keys(),
+  ]);
+  const keys = new Set<string>();
+  for (let i = 0; i < requests.length; i += 1) {
+    keys.add(requests[i].url);
+    if (i > 0 && i % 256 === 0) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    }
+  }
+  const cached: SegmentMeta[] = [];
+  for (let i = 0; i < records.length; i += 1) {
+    const record = records[i];
+    if (getCacheKeyVariants(record.key).some((key) => keys.has(key))) {
+      cached.push(record);
+    }
+    if (i > 0 && i % 256 === 0) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    }
+  }
+  return cached;
+}
+
 /** 按剧集聚合已缓存内容的统计（缓存管理面板用），按最近访问倒序 */
 export async function getEpisodeCacheStats(): Promise<EpisodeCacheStat[]> {
   try {
-    const records = await metaStore.all();
+    const records = await getCachedSegmentRecords();
     const grouped = new Map<string, EpisodeCacheStat>();
     for (const record of records) {
       const stat = grouped.get(record.episodeKey);
       if (stat) {
         stat.segments += 1;
         stat.bytes += record.bytes || 0;
-        if (record.lastAccess > stat.lastAccess) stat.lastAccess = record.lastAccess;
+        if (record.lastAccess > stat.lastAccess)
+          stat.lastAccess = record.lastAccess;
         if (!stat.title && record.title) stat.title = record.title;
         if (!stat.source && record.source) stat.source = record.source;
       } else {
-        const source = record.source || record.episodeKey.split(':').slice(0, -2).join(':') || '未知来源';
+        const source =
+          record.source ||
+          record.episodeKey.split(':').slice(0, -2).join(':') ||
+          '未知来源';
         const title = record.title || '未知影片';
         grouped.set(record.episodeKey, {
           episodeKey: record.episodeKey,
@@ -506,7 +744,9 @@ export async function getEpisodeCacheStats(): Promise<EpisodeCacheStat[]> {
         });
       }
     }
-    return Array.from(grouped.values()).sort((a, b) => b.lastAccess - a.lastAccess);
+    return Array.from(grouped.values()).sort(
+      (a, b) => b.lastAccess - a.lastAccess
+    );
   } catch {
     return [];
   }
@@ -546,7 +786,6 @@ export async function deleteEpisodeCache(episodeKey: string): Promise<number> {
   return removed;
 }
 
-
 /* ------------------------------------------------------------------ */
 /* 缓存键                                                              */
 /* ------------------------------------------------------------------ */
@@ -569,13 +808,25 @@ export function normalizeSegmentUrl(url: string): string {
 /**
  * 生成片段缓存键。
  *
- * - `useProxy = true`：转成同源的 `/api/m3u8?url=...`，键稳定，且天然规避源站
- *   的 Referer / CORS 校验；
- * - `useProxy = false`：直接用源站绝对 URL 作为键，省掉服务端带宽。
+ * - `useProxy = true`：使用同源的 `/api/m3u8?url=...` 格式；
+ * - `useProxy = false`：使用源站绝对 URL 格式。
+ * 缓存键格式独立于下载路由：预取始终优先直连，按设置允许代理兜底。
  */
-export function buildSegmentCacheKey(segmentUrl: string, useProxy = true): string {
+export function buildSegmentCacheKey(
+  segmentUrl: string,
+  useProxy = true,
+  range?: SegmentByteRange
+): string {
   const normalized = normalizeSegmentUrl(segmentUrl);
-  return useProxy ? `/api/m3u8?url=${encodeURIComponent(normalized)}` : normalized;
+  const key = useProxy
+    ? `/api/m3u8?url=${encodeURIComponent(normalized)}`
+    : normalized;
+  if (!range) return key;
+  // A synthetic query belongs only to Cache Storage, never to the CDN request.
+  const url = new URL(key, 'https://cache.invalid');
+  url.hash = '';
+  url.searchParams.set('__moontv_range', `${range.start}-${range.end}`);
+  return useProxy ? `${url.pathname}${url.search}` : url.href;
 }
 
 /* ------------------------------------------------------------------ */
@@ -592,7 +843,7 @@ export async function putCachedSegment(
   contentType?: string | null
 ): Promise<void> {
   const cache = await openVideoCache();
-  if (!cache) return;
+  if (!cache) throw new Error('Video cache storage unavailable');
 
   await cache.put(
     key,
@@ -609,7 +860,8 @@ export async function putCachedSegment(
 /** 判断是否为 Cache Storage 配额耗尽（各浏览器报错类型不一，按 name + message 双判） */
 export function isQuotaExceededError(err: unknown): boolean {
   if (!err) return false;
-  if (err instanceof DOMException && err.name === 'QuotaExceededError') return true;
+  if (err instanceof DOMException && err.name === 'QuotaExceededError')
+    return true;
   const name = (err as { name?: unknown }).name;
   if (name === 'QuotaExceededError') return true;
   const message = err instanceof Error ? err.message : String(err);
@@ -685,7 +937,9 @@ export async function readCachedSegment(
     const [data, recordPrimary, recordMatched] = await Promise.all([
       hit.arrayBuffer(),
       metaStore.get(key).catch(() => undefined),
-      matchedKey !== key ? metaStore.get(matchedKey).catch(() => undefined) : undefined,
+      matchedKey !== key
+        ? metaStore.get(matchedKey).catch(() => undefined)
+        : undefined,
     ]);
     const record = recordPrimary ?? recordMatched;
     return {

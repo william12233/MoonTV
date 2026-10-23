@@ -315,6 +315,56 @@ export function pickLevelIndex(
 }
 
 /**
+ * 「自动降档」的决策结果。
+ *
+ * - `downshift`：把 ABR 上限压到 `nextCap`；
+ * - `advise-source`：已经无可降，只能提示用户换源；
+ * - `none`：什么都不做（手动锁档 / 信息不足）。
+ */
+export type DownshiftDecision =
+  | { action: 'none' }
+  | { action: 'advise-source'; reason: 'single-level' | 'lowest-level' }
+  | { action: 'downshift'; nextCap: number };
+
+/**
+ * 弱网卡顿时「要不要降档」的纯逻辑。
+ *
+ * 关键规则：**只有一档画质的源没有"更低画质"可降**。此时压 ABR 上限毫无
+ * 意义（唯一一档被钉死），却会让 hls.js 白做一次换档 flush——正在等数据的
+ * seek 会因此被打回旧位置。所以单档位源只提示换源，绝不改 `autoLevelCapping`。
+ *
+ * 手动锁定档位（`autoLevelEnabled === false`）同样不插手：用户已经明确表达
+ * 过意愿，自动降档只会让选择看起来"失灵"。
+ */
+export function decideDownshift(params: {
+  levels: HlsLevelLike[];
+  autoLevelEnabled: boolean;
+  /** 当前正在加载的档位下标 */
+  currentLevel: number;
+  /** 当前 ABR 上限；无上限传 `Number.POSITIVE_INFINITY` */
+  autoLevelCapping: number;
+}): DownshiftDecision {
+  const { levels, autoLevelEnabled, currentLevel, autoLevelCapping } = params;
+
+  if (!autoLevelEnabled) return { action: 'none' };
+  if (!Array.isArray(levels) || levels.length <= 1) {
+    return { action: 'advise-source', reason: 'single-level' };
+  }
+
+  const cap =
+    typeof autoLevelCapping === 'number' && autoLevelCapping >= 0
+      ? autoLevelCapping
+      : Number.POSITIVE_INFINITY;
+  if (cap === 0) return { action: 'advise-source', reason: 'lowest-level' };
+
+  const base = Math.min(
+    Math.max(0, Number.isFinite(currentLevel) ? currentLevel : 0),
+    cap
+  );
+  return { action: 'downshift', nextCap: Math.max(0, base - 1) };
+}
+
+/**
  * 生成 ArtPlayer `setting.selector` 选项列表。
  *
  * 结构：`自动` → `最高画质 (1080P)` → 各档位（按画面高度**降序**）。

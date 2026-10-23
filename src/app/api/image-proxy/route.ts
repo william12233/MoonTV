@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 
+import { fetchMediaUrl, validateMediaUrl } from '@/lib/url-guard';
+
 export const runtime = 'edge';
 
 // OrionTV 兼容接口
@@ -11,8 +13,14 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Missing image URL' }, { status: 400 });
   }
 
+  const guard = validateMediaUrl(imageUrl);
+  if (!guard.ok) {
+    return NextResponse.json({ error: guard.reason }, { status: 403 });
+  }
+
   try {
-    const imageResponse = await fetch(imageUrl, {
+    const imageResponse = await fetchMediaUrl(imageUrl, {
+      signal: request.signal,
       headers: {
         Referer: 'https://movie.douban.com/',
         'User-Agent':
@@ -29,6 +37,14 @@ export async function GET(request: Request) {
 
     const contentType = imageResponse.headers.get('content-type');
 
+    if (!contentType?.toLowerCase().startsWith('image/')) {
+      await imageResponse.body?.cancel();
+      return NextResponse.json(
+        { error: 'Not an image response' },
+        { status: 415 }
+      );
+    }
+
     if (!imageResponse.body) {
       return NextResponse.json(
         { error: 'Image response has no body' },
@@ -41,6 +57,7 @@ export async function GET(request: Request) {
     if (contentType) {
       headers.set('Content-Type', contentType);
     }
+    headers.set('X-Content-Type-Options', 'nosniff');
 
     // 设置缓存头（可选）
     headers.set('Cache-Control', 'public, max-age=15720000, s-maxage=15720000'); // 缓存半年

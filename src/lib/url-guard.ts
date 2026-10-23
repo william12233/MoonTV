@@ -34,8 +34,19 @@ function isDecimalIpv4(hostname: string): boolean {
 }
 
 export function isBlockedHost(hostname: string): boolean {
-  const host = hostname.trim().toLowerCase();
+  const host = hostname
+    .trim()
+    .toLowerCase()
+    .replace(/^\[|\]$/g, '')
+    .replace(/\.$/, '');
   if (!host) return true;
+  if (host.includes(':')) {
+    // WHATWG URL normalizes IPv4-mapped IPv6 into hexadecimal groups.
+    if (/^::ffff:/i.test(host)) return true;
+    if (/^f[cd][0-9a-f]{2}:|^fe[89ab][0-9a-f]:/i.test(host)) return true;
+    if (host === '::' || host === '::1') return true;
+  }
+  if (host.endsWith('.localhost')) return true;
   if (isDecimalIpv4(host)) return true;
   return PRIVATE_HOST_PATTERNS.some((pattern) => pattern.test(host));
 }
@@ -95,6 +106,10 @@ export function validateMediaUrl(
     return { ok: false, reason: '仅支持 http/https 协议' };
   }
 
+  if (parsed.username || parsed.password) {
+    return { ok: false, reason: '不允许 URL 包含认证信息' };
+  }
+
   if (isBlockedHost(parsed.hostname)) {
     return { ok: false, reason: '不允许访问该地址' };
   }
@@ -105,9 +120,31 @@ export function validateMediaUrl(
     extra.map((item) => item.trim().toLowerCase()).filter(Boolean)
   );
 
-  if (effectiveAllow.length > 0 && !matchesAllowList(parsed.hostname, effectiveAllow)) {
+  if (
+    effectiveAllow.length > 0 &&
+    !matchesAllowList(parsed.hostname, effectiveAllow)
+  ) {
     return { ok: false, reason: '该域名不在允许列表中' };
   }
 
   return { ok: true };
+}
+
+/** Validate each redirect target before sending another upstream request. */
+export async function fetchMediaUrl(
+  raw: string,
+  options: RequestInit = {}
+): Promise<Response> {
+  let url = raw;
+  for (let redirects = 0; redirects <= 5; redirects += 1) {
+    const guard = validateMediaUrl(url);
+    if (!guard.ok) throw new Error(guard.reason || 'Media URL blocked');
+    const response = await fetch(url, { ...options, redirect: 'manual' });
+    if (![301, 302, 303, 307, 308].includes(response.status)) return response;
+    const target = response.headers.get('Location');
+    await response.body?.cancel();
+    if (!target) throw new Error('Redirect location missing');
+    url = new URL(target, url).href;
+  }
+  throw new Error('Too many media redirects');
 }

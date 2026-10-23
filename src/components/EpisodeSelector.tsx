@@ -325,32 +325,29 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
     totalEpisodes
   );
 
+  // 分段控件式 Tab 样式：选中态为白色胶囊，未选中态保持透明
+  const tabClass = (active: boolean) =>
+    `flex-1 cursor-pointer rounded-lg py-2 text-center text-sm font-medium transition-all duration-200 ${
+      active
+        ? 'bg-white text-green-600 shadow-sm dark:bg-white/15 dark:text-green-400'
+        : 'text-gray-600 hover:text-green-600 dark:text-gray-300 dark:hover:text-green-400'
+    }`;
+
   return (
-    <div className='px-4 py-0 h-full bg-black/10 dark:bg-white/5 flex flex-col overflow-hidden'>
-      {/* 主要的 Tab 切换 - 无缝融入设计 */}
-      <div className='flex mb-1 -mx-6 flex-shrink-0'>
+    <div className='flex h-full flex-col overflow-hidden bg-black/[0.03] px-3 py-3 dark:bg-white/[0.04]'>
+      {/* 主要的 Tab 切换 - 分段控件 */}
+      <div className='mb-3 flex flex-shrink-0 gap-1 rounded-xl bg-black/5 p-1 dark:bg-white/10'>
         {totalEpisodes > 1 && (
           <div
             onClick={() => setActiveTab('episodes')}
-            className={`flex-1 py-3 px-6 text-center cursor-pointer transition-all duration-200 font-medium
-              ${
-                activeTab === 'episodes'
-                  ? 'text-green-600 dark:text-green-400'
-                  : 'text-gray-700 hover:text-green-600 bg-black/5 dark:bg-white/5 dark:text-gray-300 dark:hover:text-green-400 hover:bg-black/3 dark:hover:bg-white/3'
-              }
-            `.trim()}
+            className={tabClass(activeTab === 'episodes')}
           >
             选集
           </div>
         )}
         <div
           onClick={handleSourceTabClick}
-          className={`flex-1 py-3 px-6 text-center cursor-pointer transition-all duration-200 font-medium flex items-center justify-center
-            ${
-              activeTab === 'sources'
-                ? 'text-green-600 dark:text-green-400'
-                : 'text-gray-700 hover:text-green-600 bg-black/5 dark:bg-white/5 dark:text-gray-300 dark:hover:text-green-400 hover:bg-black/3 dark:hover:bg-white/3'
-            }
+          className={`${tabClass(activeTab === 'sources')} flex items-center justify-center
           `.trim()}
         >
           <span>换源</span>
@@ -412,7 +409,7 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
       {activeTab === 'episodes' && (
         <>
           {/* 分类标签 */}
-          <div className='flex items-center gap-4 mb-4 border-b border-gray-300 dark:border-gray-700 -mx-6 px-6 flex-shrink-0'>
+          <div className='mb-2 flex flex-shrink-0 items-center gap-2 border-b border-black/5 pb-1 dark:border-white/10'>
             <div className='flex-1 overflow-x-auto scrollbar-hide' ref={categoryContainerRef}>
               <div className='flex gap-2 min-w-max'>
                 {categories.map((label, idx) => {
@@ -443,7 +440,7 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
             </div>
             {/* 向上/向下按钮 */}
             <button
-              className='flex-shrink-0 w-8 h-8 rounded-md flex items-center justify-center text-gray-700 hover:text-green-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:text-green-400 dark:hover:bg-white/20 transition-colors transform translate-y-[-4px]'
+              className='flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-gray-600 transition-colors hover:bg-black/5 hover:text-green-600 dark:text-gray-300 dark:hover:bg-white/10 dark:hover:text-green-400'
               onClick={() => {
                 // 切换集数排序（正序/倒序）
                 setDescending((prev) => !prev);
@@ -466,8 +463,8 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
           </div>
 
           {/* 集数网格 */}
-          <div className='overflow-y-auto flex-1 pb-4 scrollbar-hide'>
-            <div className='grid grid-cols-3 sm:grid-cols-4 gap-3'>
+          <div className='scrollbar-hide flex-1 overflow-y-auto pb-1'>
+            <div className='grid grid-cols-3 gap-2 sm:grid-cols-4'>
               {(() => {
                 const len = currentEnd - currentStart + 1;
                 const episodes = Array.from({ length: len }, (_, i) =>
@@ -480,11 +477,11 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
                   <button
                     key={episodeNumber}
                     onClick={() => handleEpisodeClick(episodeNumber - 1)}
-                    className={`h-9 px-1 py-1 flex items-center justify-center text-xs font-medium rounded transition-all duration-200 whitespace-nowrap font-mono
+                    className={`flex h-9 items-center justify-center whitespace-nowrap rounded-lg px-1 py-1 font-mono text-xs font-medium transition-all duration-200
                       ${
                         isActive
-                          ? 'bg-green-500 text-white shadow-lg shadow-green-500/25 dark:bg-green-600'
-                          : 'bg-gray-200 text-gray-700 hover:bg-gray-300 hover:scale-105 dark:bg-white/10 dark:text-gray-300 dark:hover:bg-white/20'
+                          ? 'bg-green-500 text-white shadow-sm shadow-green-500/25 dark:bg-green-600'
+                          : 'bg-black/5 text-gray-700 hover:bg-black/10 dark:bg-white/10 dark:text-gray-300 dark:hover:bg-white/20'
                       }`.trim()}
                   >
                     {(() => {
@@ -509,7 +506,7 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
 
       {/* 换源 Tab 内容 */}
       {activeTab === 'sources' && (
-        <div className='flex flex-col h-full mt-4'>
+        <div className='flex h-full flex-col pt-1'>
           {sourceSearchLoading && (
             <div className='flex items-center justify-center py-8'>
               <div className='animate-spin rounded-full h-8 w-8 border-b-2 border-green-500'></div>
@@ -567,7 +564,7 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
           {!sourceSearchLoading &&
             !sourceSearchError &&
             availableSources.length > 0 && (
-              <div className='flex-1 overflow-y-auto space-y-2 pb-20 scrollbar-hide'>
+              <div className='scrollbar-hide flex-1 space-y-1.5 overflow-y-auto pb-2'>
                 {availableSources
                   .sort((a, b) => {
                     const aIsCurrent =
@@ -710,7 +707,7 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
                       </div>
                     );
                   })}
-                <div className='flex-shrink-0 mt-auto pt-2 border-t border-gray-400 dark:border-gray-700'>
+                <div className='mt-auto flex-shrink-0 border-t border-black/5 pt-2 dark:border-white/10'>
                   <button
                     onClick={() => {
                       if (videoTitle) {

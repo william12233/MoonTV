@@ -15,6 +15,7 @@ import {
   recordSegmentProbe,
   touchMeta,
 } from '@/lib/video-cache';
+import { normalizeByteRange, type SegmentByteRange } from '@/lib/video-byte-range';
 
 /** 切集后延迟恢复弹幕可见性的毫秒数 */
 export const DANMAKU_VISIBLE_RESTORE_DELAY_MS = 1500;
@@ -465,15 +466,15 @@ export function createCustomHlsLoader(
    *  - 再叠加 readCachedSegment 内部的「相对路径/绝对 URL」双重兜底，
    *    基本能覆盖所有 key 不一致的情况。
    */
-  function candidateCacheKeys(contextUrl: string): string[] {
+  function candidateCacheKeys(contextUrl: string, range?: SegmentByteRange): string[] {
     const liveSettings =
       typeof window !== 'undefined' ? loadCacheSettings() : DEFAULT_CACHE_SETTINGS;
     const preferredUseProxy =
       options.useProxy !== undefined ? options.useProxy : liveSettings.useProxy;
     const urls = new Set<string>();
     // 优先按当前偏好的 useProxy 生成，其次反过来兜底
-    urls.add(buildSegmentCacheKey(contextUrl, preferredUseProxy));
-    urls.add(buildSegmentCacheKey(contextUrl, !preferredUseProxy));
+    urls.add(buildSegmentCacheKey(contextUrl, preferredUseProxy, range));
+    urls.add(buildSegmentCacheKey(contextUrl, !preferredUseProxy, range));
     return Array.from(urls);
   }
 
@@ -521,6 +522,7 @@ export function createCustomHlsLoader(
             ? (cfg.url || cfg.uri)
             : undefined);
         const rangeStart = context?.rangeStart ?? cfg?.rangeStart;
+        const rangeEnd = context?.rangeEnd ?? cfg?.rangeEnd;
         const type: string | undefined = rawType as any;
         const url = typeof rawUrl === 'string' ? rawUrl : '';
 
@@ -544,22 +546,19 @@ export function createCustomHlsLoader(
         }
 
         // ② 片段：缓存优先
-        //    - 真正需要跳过缓存的字节范围分片特征是：URL 完全相同、每次请求的字节区段不同。
-        //      但 hls.js 常把 rangeStart=0、rangeEnd=undefined 也传过来（语义就是整个文件），
-        //      这对 plist0.ts / plist1.ts 这种"每个分片一个独立 URL"的源站完全可以缓存。
-        //      所以只有 rangeStart > 0 才保守跳过；rangeStart == null / ==0 一律正常走缓存。
+        //    - 有效的 [rangeStart, rangeEnd) 使用独立缓存键，包含从 0 开始的区间。
+        //      rangeEnd=0 / undefined 是 hls.js 的整文件哨兵，不应误判。
         //    - 没有明确 type 时：用 URL 后缀/关键词启发式判断是不是视频/音频分片。
         const looksLikeFragment =
           /\.(ts|m4s|m4v|mp4|webm|aac|mp3)(\?|$)/i.test(url) ||
           /segment|fragment|clip|part|chunk|frag|plist/i.test(url);
         const treatAsFragment = type === 'fragment' || (!type && looksLikeFragment);
-        const isTrueByteRange =
-          rangeStart != null &&
-          (typeof rangeStart === 'number' ? rangeStart > 0 : String(rangeStart) !== '0');
+        const range = normalizeByteRange(rangeStart, rangeEnd);
+        const invalidRange = !range && (rangeStart > 0 || rangeEnd > 0);
 
         if (
           !treatAsFragment ||
-          isTrueByteRange ||
+          invalidRange ||
           typeof caches === 'undefined'
         ) {
           baseLoad(context, cfg, callbacks);
@@ -568,7 +567,7 @@ export function createCustomHlsLoader(
 
         // 候选缓存键按 (useProxy=true/false) × (相对路径/绝对URL) 生成，
         // 任何一个命中就算命中，解决设置切换 / 浏览器自动补全 origin 导致的不匹配。
-        const keys = candidateCacheKeys(url);
+        const keys = candidateCacheKeys(url, range);
 
         (async () => {
           for (const cacheKey of keys) {

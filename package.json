@@ -65,6 +65,7 @@
     "@testing-library/react": "^15.0.7",
     "@types/aria-query": "^5.0.4",
     "@types/he": "^1.2.3",
+    "@types/jest": "^27.5.2",
     "@types/node": "24.0.3",
     "@types/pako": "^2.0.4",
     "@types/react": "^18.3.18",
@@ -91,10 +92,10 @@
   "lint-staged": {
     "**/*.{js,jsx,ts,tsx}": [
       "eslint --max-warnings=0",
-      "prettier -w"
+      "prettier --plugin-search-dir .husky -w"
     ],
     "**/*.{json,css,scss,md,webmanifest}": [
-      "prettier -w"
+      "prettier --plugin-search-dir .husky -w"
     ]
   },
   "packageManager": "pnpm@10.14.0"

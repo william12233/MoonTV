@@ -5,14 +5,14 @@
  * 所有值以 1280px 视口为基准换算成 vw，让元素尺寸随屏幕连续变化。
  */
 :root {
-  --nav-h: 4.375vw;              /* 导航栏高度：56px @1280 → 84px @1920   */
-  --nav-px: 1.25vw;              /* 左右内边距：16px @1280 → 24px @1920   */
-  --nav-gap: 1.25vw;             /* 区块间距：16px @1280 → 24px @1920     */
-  --nav-link-gap: 0.78125vw;     /* 菜单项内间距：10px @1280 → 15px @1920  */
-  --nav-text: clamp(13px, 1.171875vw, 22.5px);   /* ★ 菜单字号带上下限   */
-  --nav-icon: clamp(15px, 1.40625vw, 27px);      /* ★ 图标带上下限      */
-  --nav-logo: clamp(18px, 1.875vw, 36px);        /* ★ Logo 带上下限      */
-  --nav-btn: clamp(30px, 2.5vw, 48px);           /* ★ 按钮带上下限      */
+  --nav-h: 4.375vw; /* 导航栏高度：56px @1280 → 84px @1920   */
+  --nav-px: 1.25vw; /* 左右内边距：16px @1280 → 24px @1920   */
+  --nav-gap: 1.25vw; /* 区块间距：16px @1280 → 24px @1920     */
+  --nav-link-gap: 0.78125vw; /* 菜单项内间距：10px @1280 → 15px @1920  */
+  --nav-text: clamp(13px, 1.171875vw, 22.5px); /* ★ 菜单字号带上下限   */
+  --nav-icon: clamp(15px, 1.40625vw, 27px); /* ★ 图标带上下限      */
+  --nav-logo: clamp(18px, 1.875vw, 36px); /* ★ Logo 带上下限      */
+  --nav-btn: clamp(30px, 2.5vw, 48px); /* ★ 按钮带上下限      */
 
   /* ★ 搜索栏：与视口等比缩放，clamp 保护下限 */
   --nav-search-w: clamp(210px, 21.875vw, 420px);
@@ -76,7 +76,7 @@
   font-weight: 700;
   line-height: 16px;
   text-align: center;
-  pointer-events: none;   /* ★ 不阻挡点击齿轮按钮 */
+  pointer-events: none; /* ★ 不阻挡点击齿轮按钮 */
   z-index: 10;
   box-shadow: 0 0 0 1.5px rgb(255 255 255 / 0.95);
 }
@@ -101,8 +101,8 @@
 .top-nav__search {
   width: var(--nav-search-w);
   flex-shrink: 0;
-  display: flex;                  /* ★ 正常文档流 */
-  align-items: stretch;           /* ★ 子项等高 */
+  display: flex; /* ★ 正常文档流 */
+  align-items: stretch; /* ★ 子项等高 */
   position: relative;
 }
 
@@ -111,14 +111,27 @@
   flex: 1 1 auto;
   height: var(--nav-search-h);
   font-size: var(--nav-search-text);
-  min-width: 0;                   /* ★ 允许收缩，防止 flex 子项溢出 */
-  padding-left: 32px !important;  /* ★ 固定值，只给放大镜图标留位 */
+  min-width: 0; /* ★ 允许收缩，防止 flex 子项溢出 */
+  padding-left: 32px !important; /* ★ 固定值，只给放大镜图标留位 */
   padding-right: 32px !important;
 }
 
 .top-nav__search-icon {
   width: var(--nav-icon);
   height: var(--nav-icon);
+}
+
+/* ★ 源选择器按钮（导航栏紧凑版）：与搜索框等高，随导航栏等比缩放 */
+.top-nav__source-btn {
+  height: var(--nav-search-h);
+  padding-left: calc(var(--nav-search-h) * 0.3333);
+  padding-right: calc(var(--nav-search-h) * 0.3333);
+  gap: calc(var(--nav-search-h) * 0.1111);
+}
+.top-nav__source-btn > svg {
+  width: var(--nav-icon);
+  height: var(--nav-icon);
+  flex-shrink: 0;
 }
 
 .top-nav__searchbox::placeholder {
@@ -163,7 +176,9 @@
 }
 
 /* 导航栏容器 */
-.top-nav { height: var(--nav-h); }
+.top-nav {
+  height: var(--nav-h);
+}
 .top-nav__inner {
   width: 100%;
   max-width: 100%;
@@ -172,7 +187,9 @@
   padding-left: var(--nav-px);
   padding-right: var(--nav-px);
 }
-.top-nav__menu { gap: var(--nav-link-gap); }
+.top-nav__menu {
+  gap: var(--nav-link-gap);
+}
 .top-nav__link {
   padding-left: var(--nav-link-gap);
   padding-right: var(--nav-link-gap);
@@ -204,7 +221,9 @@
 }
 
 @media (max-width: 1023px) {
-  .top-nav__text { display: none; }
+  .top-nav__text {
+    display: none;
+  }
   .top-nav__link {
     min-width: 36px;
     min-height: 36px;
@@ -212,55 +231,130 @@
   }
 }
 
-html, body {
+html,
+body {
   height: 100%;
   overflow-x: hidden;
   overscroll-behavior: none;
 }
-body { color: rgb(var(--foreground-rgb)); }
+body {
+  color: rgb(var(--foreground-rgb));
+}
 html:not(.dark) body {
   background: linear-gradient(
     180deg,
-    #e6f3fb 0%, #eaf3f7 18%, #f7f7f3 38%,
-    #e9ecef 60%, #dbe3ea 80%, #d3dde6 100%
+    #e6f3fb 0%,
+    #eaf3f7 18%,
+    #f7f7f3 38%,
+    #e9ecef 60%,
+    #dbe3ea 80%,
+    #d3dde6 100%
   );
   background-attachment: fixed;
 }
-::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-track { background: rgba(31, 41, 55, 0.1); }
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(31, 41, 55, 0.1);
+}
 ::-webkit-scrollbar-thumb {
   background: rgba(75, 85, 99, 0.3);
   border-radius: 4px;
 }
-::-webkit-scrollbar-thumb:hover { background: rgba(107, 114, 128, 0.5); }
-.video-card-hover { transition: transform 0.3s ease; }
-.video-card-hover:hover { transform: scale(1.05); }
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(107, 114, 128, 0.5);
+}
+.video-card-hover {
+  transition: transform 0.3s ease;
+}
+.video-card-hover:hover {
+  transform: scale(1.05);
+}
 .gradient-overlay {
-  background: linear-gradient(to bottom, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.8) 100%);
+  background: linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0) 0%,
+    rgba(0, 0, 0, 0.8) 100%
+  );
 }
 @media (max-width: 767px) {
-  html, body { scrollbar-width: none; }
-  html::-webkit-scrollbar, body::-webkit-scrollbar { display: none; }
+  html,
+  body {
+    scrollbar-width: none;
+  }
+  html::-webkit-scrollbar,
+  body::-webkit-scrollbar {
+    display: none;
+  }
 }
-@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
-@keyframes fade-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
 ::view-transition-old(root),
 ::view-transition-new(root) {
   animation-duration: 0.6s;
   animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
   animation-fill-mode: both;
 }
-::view-transition-old(root) { animation-name: fade-out; }
-::view-transition-new(root) { animation-name: fade-in; }
+::view-transition-old(root) {
+  animation-name: fade-out;
+}
+::view-transition-new(root) {
+  animation-name: fade-in;
+}
 div[data-media-provider] video {
   height: 100%;
   object-fit: contain;
+}
+/* 移动端长按视频会触发浏览器原生长按菜单（复制视频帧 / 画中画），由手势逻辑接管 */
+.art-video-player video {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 .art-poster {
   background-size: contain !important;
   background-position: center center !important;
   background-repeat: no-repeat !important;
   background-color: #000 !important;
+}
+.art-video-player .art-settings {
+  max-width: calc(100% - 2 * var(--art-padding, 10px));
+}
+.art-video-player .art-settings .art-setting-item {
+  gap: 12px;
+  min-height: var(--art-settings-item-height, 35px);
+  height: auto !important;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+.art-video-player .art-settings .art-setting-item-right {
+  min-width: 0;
+}
+.art-video-player .art-settings .art-setting-item-right-tooltip {
+  min-width: 0;
+  white-space: normal !important;
+  overflow-wrap: anywhere;
+  text-align: right;
+  line-height: 1.4;
+}
+.art-video-player .art-settings .art-setting-item-right-icon {
+  flex-shrink: 0;
 }
 .art-video-player .moontv-play-header {
   transition: opacity 0.2s ease, visibility 0.2s ease;
@@ -272,6 +366,14 @@ div[data-media-provider] video {
   visibility: hidden;
   pointer-events: none !important;
 }
+.art-video-player .moontv-progress-preview {
+  transition: opacity 0.15s ease, visibility 0.15s ease;
+}
+.art-video-player.art-hide-cursor .moontv-progress-preview,
+.art-video-player.art-lock .moontv-progress-preview {
+  opacity: 0;
+  visibility: hidden;
+}
 .art-video-player:fullscreen .moontv-player-modal > div,
 .art-video-player:-webkit-full-screen .moontv-player-modal > div,
 .art-video-player.art-fullscreen-web .moontv-player-modal > div,
@@ -281,5 +383,129 @@ div[data-media-provider] video {
 @media (max-width: 768px) {
   .art-control-pip,
   .art-control-fullscreenWeb,
-  .art-control-volume { display: none !important; }
+  .art-control-volume {
+    display: none !important;
+  }
+}
+
+/* 播放器内置文字提示（notice）：固定到画面左下角，替代默认的顶部居中提示条 */
+.art-video-player .art-notice.art-notice {
+  inset: auto auto calc(var(--art-padding) + 4px) var(--art-padding);
+  width: auto;
+  max-width: calc(100% - var(--art-padding) * 2);
+  padding: 0;
+  justify-content: flex-start;
+  transition: bottom 0.2s ease;
+}
+
+/* 控制栏显示 / 悬停时抬高一点，避免提示被进度条和按钮遮挡 */
+.art-video-player.art-control-show .art-notice.art-notice,
+.art-video-player.art-hover .art-notice.art-notice {
+  bottom: calc(var(--art-control-height) + 12px);
+}
+
+/* 自定义堆叠提示：右上角，新提示在最上方；内置 notice 仍在左下角 */
+.art-video-player .moontv-notice-stack {
+  position: absolute;
+  z-index: 80;
+  top: calc(var(--art-padding) + 4px);
+  right: var(--art-padding);
+  display: flex;
+  /* column-reverse：DOM 末尾的最新一条显示在最上方 */
+  flex-direction: column-reverse;
+  align-items: flex-end;
+  gap: 6px;
+  max-width: calc(100% - var(--art-padding) * 2);
+  pointer-events: none;
+}
+
+.art-video-player .moontv-notice-stack .moontv-notice-item {
+  max-width: 100%;
+  padding: 5px 8px;
+  border-radius: var(--art-border-radius);
+  background-color: var(--art-tip-background);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1.35;
+  word-break: break-word;
+  animation: moontv-notice-in 0.16s ease-out;
+}
+
+@keyframes moontv-notice-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 移动端手势反馈：亮度遮罩盖在视频上，不挡住字幕 / 弹幕 / 控制栏 */
+.art-video-player .moontv-gesture-dim {
+  position: absolute;
+  inset: 0;
+  z-index: 15;
+  background-color: #000;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s linear;
+}
+
+/* 手势 HUD：音量 / 亮度 / 双击快进，仿系统音量浮层的顶部横向滑杆 */
+.art-video-player .moontv-gesture-hud {
+  position: absolute;
+  left: 50%;
+  top: calc(var(--art-padding) + 10px);
+  z-index: 90;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: min(70%, 240px);
+  padding: 6px 12px;
+  border-radius: 999px;
+  background-color: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(8px);
+  color: #fff;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateX(-50%) translateY(-4px);
+  transition: opacity 0.12s ease, transform 0.12s ease, visibility 0.12s;
+}
+
+.art-video-player .moontv-gesture-hud.is-visible {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(-50%) translateY(0);
+}
+
+.art-video-player .moontv-gesture-hud-text {
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.art-video-player .moontv-gesture-hud-track {
+  width: 100px;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background-color: rgba(255, 255, 255, 0.28);
+}
+
+.art-video-player .moontv-gesture-hud-bar {
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background-color: #fff;
+  /* 手势滑杆必须实时跟手，不能加过渡，否则会始终落后于手指 */
+  transition: none;
+  will-change: width;
 }
