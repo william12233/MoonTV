@@ -16,6 +16,12 @@ interface ApiSearchItem {
   type_name?: string;
 }
 
+/** 上游搜索接口的响应结构 */
+interface ApiSearchResponse {
+  list?: unknown[];
+  pagecount?: number;
+}
+
 // 匹配 m3u8 链接的正则
 const M3U8_PATTERN = /(https?:\/\/[^"'\s]+?\.m3u8)/g;
 
@@ -104,31 +110,68 @@ function parseEpisodes(
   return { episodes, titles };
 }
 
-/** 映射 API 数据到 SearchResult */
+/**
+ * 映射 API 数据到 SearchResult。
+ * 单条数据缺字段或类型异常时返回 null，避免整页 map 抛错拖垮整个源。
+ */
 function mapItemToResult(
-  item: ApiSearchItem,
+  item: unknown,
   apiSite: ApiSite,
   apiName: string
-): SearchResult {
+): SearchResult | null {
+  if (!item || typeof item !== 'object') return null;
+
+  const raw = item as Partial<ApiSearchItem>;
+  if (
+    raw.vod_id === undefined ||
+    raw.vod_id === null ||
+    String(raw.vod_id).trim() === ''
+  ) {
+    return null;
+  }
+
+  const title = typeof raw.vod_name === 'string' ? raw.vod_name.trim() : '';
+  if (!title) return null;
+
   const { episodes, titles } = parseEpisodes(
-    item.vod_play_url,
-    item.vod_content
+    typeof raw.vod_play_url === 'string' ? raw.vod_play_url : undefined,
+    typeof raw.vod_content === 'string' ? raw.vod_content : undefined
   );
 
   return {
-    id: item.vod_id.toString(),
-    title: item.vod_name.trim().replace(/\s+/g, ' '),
-    poster: item.vod_pic,
+    id: String(raw.vod_id),
+    title: title.replace(/\s+/g, ' '),
+    poster: typeof raw.vod_pic === 'string' ? raw.vod_pic : '',
     episodes,
     episodes_titles: titles,
     source: apiSite.key,
     source_name: apiName,
-    class: item.vod_class,
-    year: item.vod_year?.match(/\d{4}/)?.[0] || 'unknown',
-    desc: cleanHtmlTags(item.vod_content || ''),
-    type_name: item.type_name,
-    douban_id: item.vod_douban_id,
+    class: typeof raw.vod_class === 'string' ? raw.vod_class : undefined,
+    // 上游可能把年份返回成数字，统一转成字符串再提取
+    year: String(raw.vod_year ?? '').match(/\d{4}/)?.[0] || 'unknown',
+    desc: cleanHtmlTags(
+      typeof raw.vod_content === 'string' ? raw.vod_content : ''
+    ),
+    type_name: typeof raw.type_name === 'string' ? raw.type_name : undefined,
+    douban_id:
+      raw.vod_douban_id === undefined || raw.vod_douban_id === null
+        ? undefined
+        : Number(raw.vod_douban_id) || undefined,
   };
+}
+
+/** 批量映射并丢弃脏数据 */
+function mapItemsToResults(
+  items: unknown[],
+  apiSite: ApiSite,
+  apiName: string
+): SearchResult[] {
+  const results: SearchResult[] = [];
+  for (const item of items) {
+    const mapped = mapItemToResult(item, apiSite, apiName);
+    if (mapped) results.push(mapped);
+  }
+  return results;
 }
 
 /** API 搜索流 */
@@ -179,15 +222,23 @@ async function* searchApiQuery(
     { headers: API_CONFIG.search.headers, signal },
     timeout
   );
-  if (!response.ok) return;
+  if (!response.ok) {
+    // 不再静默当作“无结果”，让失败源显示真实原因
+    throw new Error(`请求失败（HTTP ${response.status}）`);
+  }
 
-  const data = await response.json();
-  if (!Array.isArray(data?.list)) return;
+  let data: ApiSearchResponse;
+  try {
+    data = (await response.json()) as ApiSearchResponse;
+  } catch {
+    throw new Error('响应格式错误');
+  }
+  if (!Array.isArray(data?.list)) {
+    throw new Error('响应格式错误');
+  }
 
   // 第一页
-  yield data.list.map((item: ApiSearchItem) =>
-    mapItemToResult(item, apiSite, apiSite.name)
-  );
+  yield mapItemsToResults(data.list, apiSite, apiSite.name);
 
   // 分页
   if (signal?.aborted) return;
@@ -220,11 +271,13 @@ async function* searchApiQuery(
           );
           if (!pageRes.ok) return null;
 
-          const pageData = await pageRes.json();
+          const pageData = (await pageRes.json()) as ApiSearchResponse;
           if (!Array.isArray(pageData?.list)) return null;
 
-          const results = pageData.list.map((item: ApiSearchItem) =>
-            mapItemToResult(item, apiSite, apiSite.name)
+          const results = mapItemsToResults(
+            pageData.list,
+            apiSite,
+            apiSite.name
           );
           return { page, results };
         })();
@@ -255,19 +308,26 @@ async function* searchApiQuery(
             .replace('{query}', encodeURIComponent(query))
             .replace('{page}', page.toString());
 
-        const pageRes = await fetchWithTimeout(
-          pageUrl,
-          { headers: API_CONFIG.search.headers, signal },
-          timeout
-        );
-        if (!pageRes.ok) continue;
-
-        const pageData = await pageRes.json();
-        if (Array.isArray(pageData?.list)) {
-          const results = pageData.list.map((item: ApiSearchItem) =>
-            mapItemToResult(item, apiSite, apiSite.name)
+        try {
+          const pageRes = await fetchWithTimeout(
+            pageUrl,
+            { headers: API_CONFIG.search.headers, signal },
+            timeout
           );
-          if (results.length > 0) yield results;
+          if (!pageRes.ok) continue;
+
+          const pageData = (await pageRes.json()) as ApiSearchResponse;
+          if (Array.isArray(pageData?.list)) {
+            const results = mapItemsToResults(
+              pageData.list,
+              apiSite,
+              apiSite.name
+            );
+            if (results.length > 0) yield results;
+          }
+        } catch {
+          // 单页失败不影响已获得的结果，与并行模式保持一致
+          if (signal?.aborted) return;
         }
       }
     }

@@ -1,4 +1,8 @@
 #!/bin/sh
 . "$(dirname "$0")/_/husky.sh"
 
+# 根据 CHANGELOG 最新版本同步 VERSION.txt / src/lib/version.ts / src/lib/changelog.ts
+node scripts/convert-changelog.js || exit 1
+git add VERSION.txt src/lib/version.ts src/lib/changelog.ts
+
 npx lint-staged

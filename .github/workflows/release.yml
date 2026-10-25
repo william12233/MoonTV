@@ -32,10 +32,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Run convert-changelog script
-        run: node scripts/convert-changelog.js
-        env:
-          GITHUB_ACTIONS: 'true'
+      # 发布前校验版本文件是否与 CHANGELOG 一致，避免发布出带旧版本号的包
+      - name: Verify version files
+        run: node scripts/convert-changelog.js --check
 
       - name: Create Release
         uses: actions/create-release@v1

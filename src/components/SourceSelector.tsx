@@ -4,6 +4,12 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import Swal from 'sweetalert2';
 
+import {
+  clampSearchConcurrency,
+  DEFAULT_SEARCH_CONCURRENCY,
+  getSearchConcurrency,
+  MAX_SEARCH_CONCURRENCY,
+} from '@/lib/concurrency';
 import { getAvailableApiSitesClient } from '@/lib/config.client';
 import { getRequestTimeout } from '@/lib/utils';
 
@@ -22,10 +28,16 @@ export default function SourceSelector({
   setOpenFilter,
   size = 'default',
 }: SourceSelectorProps) {
-  const [availableSources, setAvailableSources] = useState<{ key: string; name: string }[]>([]);
+  const [availableSources, setAvailableSources] = useState<
+    { key: string; name: string }[]
+  >([]);
   const [isLoading, setIsLoading] = useState(true);
   const [timeoutSeconds, setTimeoutSeconds] = useState<number>(30);
-  const [enableSearchSuggestions, setEnableSearchSuggestions] = useState<boolean>(true);
+  const [searchConcurrency, setSearchConcurrency] = useState<number>(
+    DEFAULT_SEARCH_CONCURRENCY
+  );
+  const [enableSearchSuggestions, setEnableSearchSuggestions] =
+    useState<boolean>(true);
 
   const open = openFilter === 'sources';
 
@@ -34,8 +46,11 @@ export default function SourceSelector({
       const loadSources = async () => {
         try {
           const sites = await getAvailableApiSitesClient();
-          setAvailableSources(sites.map(site => ({ key: site.key, name: site.name })));
+          setAvailableSources(
+            sites.map((site) => ({ key: site.key, name: site.name }))
+          );
         } catch (error) {
+          // eslint-disable-next-line no-console
           console.error('Failed to load sources:', error);
           setAvailableSources([]);
         } finally {
@@ -58,7 +73,7 @@ export default function SourceSelector({
 
   const handleSourceClick = (sourceKey: string) => {
     if (selectedSources.includes(sourceKey)) {
-      onChange(selectedSources.filter(key => key !== sourceKey));
+      onChange(selectedSources.filter((key) => key !== sourceKey));
     } else {
       onChange([...selectedSources, sourceKey]);
     }
@@ -71,6 +86,7 @@ export default function SourceSelector({
   const handleSaveSources = () => {
     localStorage.setItem('savedSources', JSON.stringify(selectedSources));
     localStorage.setItem('requestTimeout', timeoutSeconds.toString());
+    localStorage.setItem('searchConcurrency', searchConcurrency.toString());
 
     Swal.fire({
       icon: 'success',
@@ -84,13 +100,22 @@ export default function SourceSelector({
     });
   };
 
+  const handleConcurrencyChange = (value: string) => {
+    const next = clampSearchConcurrency(value);
+    setSearchConcurrency(next);
+    // 即时生效：下一次搜索会直接读取 localStorage
+    localStorage.setItem('searchConcurrency', next.toString());
+  };
+
   const handleToggleSearchSuggestions = () => {
     const newValue = !enableSearchSuggestions;
     setEnableSearchSuggestions(newValue);
     localStorage.setItem('enableSearchSuggestions', newValue.toString());
-    window.dispatchEvent(new CustomEvent('searchSettingsChanged', {
-      detail: { enableSearchSuggestions: newValue }
-    }));
+    window.dispatchEvent(
+      new CustomEvent('searchSettingsChanged', {
+        detail: { enableSearchSuggestions: newValue },
+      })
+    );
   };
 
   useEffect(() => {
@@ -100,7 +125,7 @@ export default function SourceSelector({
         try {
           const parsedSources = JSON.parse(savedSources);
           const validSources = parsedSources.filter((source: string) =>
-            availableSources.some(avail => avail.key === source)
+            availableSources.some((avail) => avail.key === source)
           );
           if (validSources.length !== parsedSources.length) {
             localStorage.setItem('savedSources', JSON.stringify(validSources));
@@ -109,6 +134,7 @@ export default function SourceSelector({
             onChange(validSources);
           }
         } catch (error) {
+          // eslint-disable-next-line no-console
           console.error('Failed to parse saved sources:', error);
         }
       }
@@ -116,7 +142,11 @@ export default function SourceSelector({
       const timeout = getRequestTimeout();
       setTimeoutSeconds(timeout);
 
-      const savedEnableSearchSuggestions = localStorage.getItem('enableSearchSuggestions');
+      setSearchConcurrency(getSearchConcurrency());
+
+      const savedEnableSearchSuggestions = localStorage.getItem(
+        'enableSearchSuggestions'
+      );
       if (savedEnableSearchSuggestions !== null) {
         setEnableSearchSuggestions(savedEnableSearchSuggestions === 'true');
       }
@@ -171,12 +201,14 @@ export default function SourceSelector({
         <div className='overflow-y-auto p-4'>
           <div
             className='mb-3 grid gap-2'
-            style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))' }}
+            style={{
+              gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
+            }}
           >
             <button
               onClick={handleSaveSources}
               className='px-3 py-1 text-sm bg-green-100 text-green-700 rounded hover:bg-green-200 dark:bg-green-900/30 dark:text-green-400 dark:hover:bg-green-800/50 flex items-center justify-center gap-1'
-              title='保存当前选中的搜索源和超时设置'
+              title='保存当前选中的搜索源、超时和并发设置'
             >
               <Save className='w-3 h-3' />
               保存
@@ -200,11 +232,35 @@ export default function SourceSelector({
                 min='1'
                 max='60'
                 value={timeoutSeconds}
-                onChange={(e) => setTimeoutSeconds(Math.max(1, Math.min(60, Number(e.target.value) || 30)))}
+                onChange={(e) =>
+                  setTimeoutSeconds(
+                    Math.max(1, Math.min(60, Number(e.target.value) || 30))
+                  )
+                }
                 className='w-12 px-1 py-0.5 text-sm bg-white dark:bg-gray-600 border border-gray-300 dark:border-gray-500 rounded text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-1 focus:ring-green-400'
                 title='请求超时时间（秒）'
               />
-              <span className='text-xs text-gray-600 dark:text-gray-400 whitespace-nowrap'>秒</span>
+              <span className='text-xs text-gray-600 dark:text-gray-400 whitespace-nowrap'>
+                秒
+              </span>
+            </div>
+
+            <div className='flex items-center justify-center gap-2 bg-gray-100 dark:bg-gray-700 rounded px-2 py-1'>
+              <label className='text-xs text-gray-700 dark:text-gray-300 whitespace-nowrap'>
+                并发:
+              </label>
+              <input
+                type='number'
+                min={1}
+                max={MAX_SEARCH_CONCURRENCY}
+                value={searchConcurrency}
+                onChange={(e) => handleConcurrencyChange(e.target.value)}
+                className='w-12 px-1 py-0.5 text-sm bg-white dark:bg-gray-600 border border-gray-300 dark:border-gray-500 rounded text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-1 focus:ring-green-400'
+                title={`同时查询的搜索源数量（1-${MAX_SEARCH_CONCURRENCY}），立即生效`}
+              />
+              <span className='text-xs text-gray-600 dark:text-gray-400 whitespace-nowrap'>
+                个源
+              </span>
             </div>
 
             <div className='flex items-center justify-center gap-2 bg-gray-100 dark:bg-gray-700 rounded px-2 py-1'>
@@ -214,13 +270,21 @@ export default function SourceSelector({
               <button
                 onClick={handleToggleSearchSuggestions}
                 className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
-                  enableSearchSuggestions ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'
+                  enableSearchSuggestions
+                    ? 'bg-green-500'
+                    : 'bg-gray-300 dark:bg-gray-600'
                 }`}
-                title={enableSearchSuggestions ? '点击关闭搜索建议（立即生效）' : '点击开启搜索建议（立即生效）'}
+                title={
+                  enableSearchSuggestions
+                    ? '点击关闭搜索建议（立即生效）'
+                    : '点击开启搜索建议（立即生效）'
+                }
               >
                 <span
                   className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                    enableSearchSuggestions ? 'translate-x-5' : 'translate-x-0.5'
+                    enableSearchSuggestions
+                      ? 'translate-x-5'
+                      : 'translate-x-0.5'
                   }`}
                 />
               </button>
@@ -230,7 +294,9 @@ export default function SourceSelector({
           {availableSources.length > 0 ? (
             <div
               className='grid gap-2'
-              style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(100px, 1fr))' }}
+              style={{
+                gridTemplateColumns: 'repeat(auto-fit, minmax(100px, 1fr))',
+              }}
             >
               {availableSources.map((source) => (
                 <button

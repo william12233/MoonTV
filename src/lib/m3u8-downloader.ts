@@ -6,6 +6,7 @@
 
 import CryptoJS from 'crypto-js';
 
+import { stripAdSegmentsFromM3U8 } from './ad-filter';
 import { inferHeightFromBitrate } from './hls-quality';
 import { StreamingTransmuxer, transmuxTSToMP4 } from './mp4-transmuxer';
 import { fetchMediaUrl } from './url-guard';
@@ -134,6 +135,21 @@ export interface PreferredVariant {
   signal?: AbortSignal;
   /** Server-side parsing must also validate nested playlists and AES keys. */
   validateUrls?: boolean;
+  /**
+   * 浏览器侧直连播放列表失败（CORS / 反盗链 403 / DNS）时，允许改走同源
+   * `/api/m3u8?url=` 代理重试。
+   *
+   * 只能由客户端开启：服务端解析本身就跑在 `/api/m3u8` 后面，再回打代理
+   * 会形成自我递归。`validateUrls` 为 true 时一律忽略此开关。
+   */
+  allowProxyFallback?: boolean;
+  /**
+   * 解析前剔除广告分片（点播列表）。
+   *
+   * 预取器必须与播放器使用同一份过滤结果，否则预取器会按「含广告」的
+   * 时间轴记录 startTime/endTime，与 hls.js 的播放时间对不上。
+   */
+  dropAds?: boolean;
 }
 
 /** 从 `RESOLUTION=1920x1080` 中取出高度 */
@@ -234,6 +250,76 @@ function extractSubPlaylistUrl(
   return playlists[0].url;
 }
 
+/** 浏览器侧可用的播放列表代理地址；同源地址没必要绕代理，直接返回 null */
+function playlistProxyUrl(target: string): string | null {
+  if (typeof window === 'undefined') return null;
+  const origin = window.location?.origin;
+  if (!origin) return null;
+  try {
+    const parsed = new URL(target);
+    if (parsed.origin === origin) return null;
+    return `/api/m3u8?url=${encodeURIComponent(parsed.href)}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 拉取播放列表文本。
+ *
+ * 采集站的 m3u8 普遍带反盗链：浏览器直连会因为 `Origin` / `Referer` 被
+ * 403，且响应缺少 `Access-Control-Allow-Origin`，控制台只会留下一条
+ * "blocked by CORS policy"，预取队列随之直接报「播放列表解析失败」。
+ * 分片下载早就有同源代理兜底，播放列表没有，于是整条预热链路在这里断掉。
+ *
+ * 代理只作为传输通道：相对地址仍必须相对**原始播放列表地址**解析，
+ * 否则 `segment.ts` 会被解析到 MoonTV 自己的域名下。
+ */
+async function fetchPlaylistResponse(
+  target: string,
+  preferred?: PreferredVariant
+): Promise<{ response: Response; baseUrl: string }> {
+  const fetchDirect = () =>
+    preferred?.validateUrls
+      ? fetchMediaUrl(target, { signal: preferred.signal })
+      : fetch(target, { signal: preferred?.signal });
+
+  try {
+    const response = await fetchDirect();
+    if (!response.ok) {
+      throw new Error(`M3U8 request failed: ${response.status}`);
+    }
+    // Relative URIs are relative to the final URL after redirects.
+    return { response, baseUrl: response.url || target };
+  } catch (error) {
+    if (preferred?.signal?.aborted) throw error;
+    // 服务端解析（validateUrls）自身就跑在 /api/m3u8 后面，回打代理会自我递归
+    const proxy =
+      preferred?.allowProxyFallback && !preferred.validateUrls
+        ? playlistProxyUrl(target)
+        : null;
+    if (!proxy) throw error;
+
+    const response = await fetch(proxy, { signal: preferred?.signal });
+    if (!response.ok) {
+      const detail =
+        error instanceof Error && error.message
+          ? `（直连失败：${error.message}）`
+          : '';
+      throw new Error(`M3U8 request failed: ${response.status}${detail}`);
+    }
+    return { response, baseUrl: target };
+  }
+}
+
+async function fetchPlaylistText(
+  target: string,
+  preferred?: PreferredVariant
+): Promise<{ text: string; baseUrl: string }> {
+  const { response, baseUrl } = await fetchPlaylistResponse(target, preferred);
+  return { text: await response.text(), baseUrl };
+}
+
 /**
  * 解析M3U8文件（支持主播放列表自动解析）
  *
@@ -249,15 +335,14 @@ export async function parseM3U8(
     throw new Error('M3U8 解析层级过深，可能存在循环引用');
   }
 
-  const fetchPlaylist = (target: string) =>
-    preferred?.validateUrls
-      ? fetchMediaUrl(target, { signal: preferred.signal })
-      : fetch(target, { signal: preferred?.signal });
-  const response = await fetchPlaylist(url);
-  if (!response.ok) throw new Error(`M3U8 request failed: ${response.status}`);
-  // Relative URIs are relative to the final URL after redirects.
-  url = response.url || url;
-  const m3u8Str = await response.text();
+  const { text: playlistText, baseUrl } = await fetchPlaylistText(
+    url,
+    preferred
+  );
+  url = baseUrl;
+  const m3u8Str = preferred?.dropAds
+    ? stripAdSegmentsFromM3U8(playlistText)
+    : playlistText;
 
   if (m3u8Str.substring(0, 7).toUpperCase() !== '#EXTM3U') {
     throw new Error('无效的 m3u8 链接');
@@ -354,11 +439,12 @@ export async function parseM3U8(
     task.aesConf.uri = uriMatch ? applyURL(uriMatch[1], url) : '';
     task.aesConf.iv = ivMatch ? ivMatch[1] : '';
 
-    // 获取 AES key
+    // 获取 AES key（与播放列表走同一套直连 + 代理兜底，否则预热会在 key 上 403）
     if (task.aesConf.uri) {
-      const keyResponse = await fetchPlaylist(task.aesConf.uri);
-      if (!keyResponse.ok)
-        throw new Error(`AES key request failed: ${keyResponse.status}`);
+      const { response: keyResponse } = await fetchPlaylistResponse(
+        task.aesConf.uri,
+        preferred
+      );
       const keyArrayBuffer = await keyResponse.arrayBuffer();
       task.aesConf.key = arrayBufferToWordArray(keyArrayBuffer);
     }

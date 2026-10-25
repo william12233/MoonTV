@@ -7,6 +7,11 @@
  * 便于后续单元测试与复用。
  */
 
+import { stripAdSegmentsFromM3U8 } from '@/lib/ad-filter';
+import {
+  type SegmentByteRange,
+  normalizeByteRange,
+} from '@/lib/video-byte-range';
 import {
   buildSegmentCacheKey,
   DEFAULT_CACHE_SETTINGS,
@@ -15,7 +20,6 @@ import {
   recordSegmentProbe,
   touchMeta,
 } from '@/lib/video-cache';
-import { normalizeByteRange, type SegmentByteRange } from '@/lib/video-byte-range';
 
 /** 切集后延迟恢复弹幕可见性的毫秒数 */
 export const DANMAKU_VISIBLE_RESTORE_DELAY_MS = 1500;
@@ -51,41 +55,84 @@ export function formatTime(seconds: number): string {
 }
 
 /**
- * 去广告：过滤 M3U8 内容中的 #EXT-X-DISCONTINUITY 标记。
+ * 按需剔除播放列表中的广告分片。
+ *
+ * 旧实现只删除 `#EXT-X-DISCONTINUITY` 行：既不删广告分片，又丢掉 PTS
+ * 断点信息，时间轴因此出现空洞（拖动报 `bufferSeekOverHole`、画面回推、
+ * 音画错位、最终撞 MSE 配额）。现在改为真正删除广告分片条目
+ * （见 `@/lib/ad-filter`），所有不连续标记与 KEY/MAP 都保留。
+ *
+ * @param removeAds 是否启用（设置面板里的「去广告」）；默认关闭
  */
-export function filterAdsFromM3U8(m3u8Content: string): string {
-  if (!m3u8Content) return '';
+export function filterAdsFromM3U8(
+  m3u8Content: string,
+  removeAds = false
+): string {
+  if (!m3u8Content || !removeAds) return m3u8Content;
+  return stripAdSegmentsFromM3U8(m3u8Content);
+}
 
-  // 按行分割M3U8内容
-  const lines = m3u8Content.split('\n');
-  const filteredLines: string[] = [];
+/** 弹幕密度挡位；默认挡位为 `normal`（标准） */
+export type DanmakuDensity = 'sparse' | 'normal' | 'dense';
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+/** 弹幕密度挡位文案 */
+export const DANMAKU_DENSITY_LABELS: Record<DanmakuDensity, string> = {
+  sparse: '疏松',
+  normal: '标准',
+  dense: '密集',
+};
 
-    // 只过滤#EXT-X-DISCONTINUITY标识
-    if (!line.includes('#EXT-X-DISCONTINUITY')) {
-      filteredLines.push(line);
-    }
-  }
+/**
+ * 各挡位的密度参数。
+ *
+ * 密度以「每轨每秒放行条数」为基准，实际速率随当前可用轨道数动态变化：
+ *
+ *   interval = perInterval / (ratePerLane × 当前轨道数)
+ *
+ * - sparse：每轨 0.2 条/秒（约每轨 5 秒 1 条）；
+ * - normal：每轨 0.5 条/秒；
+ * - dense：每轨 1 条/秒。
+ *
+ * 这样手机横屏（轨道少）和桌面全屏（轨道多）的观感一致，也不会在高屏上
+ * 浪费轨道。以 15 轨为例：疏松约 3 条/秒、标准约 7.5 条/秒、密集约
+ * 15 条/秒，与此前固定参数基本一致。
+ *
+ * 旧实现是容量 28 的令牌桶：密集时段的前 28 条会被瞬间全部放行，之后长时间
+ * 没有弹幕（额度被同一时刻吃光）。这些同时放行的弹幕又会挤在第一条轨道右侧
+ * 排队，导致时间和轨道分布都不均匀。改为时间槽采样后，放行量被均匀摊到整条
+ * 时间轴上，配合轨道分配即可铺满所有开放轨道。
+ */
+export const DANMAKU_DENSITY_PRESETS: Record<
+  DanmakuDensity,
+  { ratePerLane: number; perInterval: number }
+> = {
+  sparse: { ratePerLane: 0.2, perInterval: 2 },
+  normal: { ratePerLane: 0.5, perInterval: 2 },
+  dense: { ratePerLane: 1, perInterval: 3 },
+};
 
-  return filteredLines.join('\n');
+let activeDanmakuDensity: DanmakuDensity = 'normal';
+
+/** 设置弹幕密度挡位；未设置 / 非法值回落到标准。 */
+export function setDanmakuDensity(density: unknown): DanmakuDensity {
+  activeDanmakuDensity =
+    density === 'sparse' || density === 'dense' ? density : 'normal';
+  return activeDanmakuDensity;
+}
+
+/** 读取当前弹幕密度挡位。 */
+export function getDanmakuDensity(): DanmakuDensity {
+  return activeDanmakuDensity;
 }
 
 /**
- * 弹幕密度限制参数。
+ * 基础过滤：只校验对象与文本长度，不限制单集总量。
  *
- * 用时间补偿的方式平滑削峰，避免硬窗口把某个时间段直接掏空。
+ * 运行期只处理当前时间窗口内的弹幕与 ready 队列，队列长度本身不产生额外
+ * 渲染开销；密度节流与 ready 预算分别控制上屏速率和每帧 DOM 测量量，因此
+ * 不需要在 load 阶段截断队列。
  */
-const DANMAKU_REFILL_RATE = 14 / 5;
-const DANMAKU_BUCKET_CAPACITY = 28;
-const DANMAKU_MAX_TOTAL = 8000;
-
-function createDanmakuFilter() {
-  let credits = DANMAKU_BUCKET_CAPACITY;
-  let lastTime = -Infinity;
-  let acceptedCount = 0;
-
+export function createDanmakuFilter() {
   return (danmu: any) => {
     if (!danmu || typeof danmu !== 'object') return false;
 
@@ -93,40 +140,59 @@ function createDanmakuFilter() {
       return false;
     }
 
-    const rawTime =
-      typeof danmu.time === 'number'
-        ? danmu.time
-        : typeof danmu.time === 'string'
-        ? Number(danmu.time)
-        : NaN;
+    return true;
+  };
+}
 
-    if (!Number.isFinite(rawTime)) {
-      return true;
+/**
+ * 密度节流器：按当前挡位限制弹幕上屏速率。
+ *
+ * 返回 true 表示当前时间槽还有配额，调用方可以让一条弹幕上屏；返回 false
+ * 时调用方应把轨道结果置为 undefined，让官方把弹幕放回 ready 队列，下一帧
+ * 再试。
+ *
+ * 为什么不直接在 `beforeVisible` 里丢弃：官方只会处理时间窗口（当前时间
+ * ±0.1 秒）内的 wait 弹幕，同一时刻成簇的弹幕一旦在这里被拒就会永久丢失，
+ * 实测每秒只能上屏几条。放回 ready 队列后，积压弹幕会按挡位速率陆续上屏，
+ * 既不丢弹幕也不会瞬间爆量。
+ *
+ * 采样按真实时钟（上屏时刻）而不是弹幕自身时间，因此切换挡位后立即生效，
+ * 且切回疏松时积压弹幕也只会按新速率慢慢放出。
+ */
+export function createDanmakuDensityThrottle(
+  now: () => number = () => Date.now() / 1000
+) {
+  let currentSlot = -1;
+  let usedInSlot = 0;
+  let lastDensity = activeDanmakuDensity;
+  let lastInterval = -1;
+
+  return (laneCount = 1): boolean => {
+    if (lastDensity !== activeDanmakuDensity) {
+      lastDensity = activeDanmakuDensity;
+      currentSlot = -1;
+      usedInSlot = 0;
     }
 
-    if (rawTime + 0.5 < lastTime) {
-      credits = DANMAKU_BUCKET_CAPACITY;
-      acceptedCount = 0;
-      lastTime = rawTime;
-    } else {
-      const elapsed = Math.max(0, rawTime - lastTime);
-      credits = Math.min(
-        DANMAKU_BUCKET_CAPACITY,
-        credits + elapsed * DANMAKU_REFILL_RATE
-      );
-      lastTime = rawTime;
+    const preset = DANMAKU_DENSITY_PRESETS[activeDanmakuDensity];
+    const lanes = Math.max(1, Math.floor(Number(laneCount) || 1));
+    // 轨道数变化（全屏、字号调整）时重新计算时间槽长度
+    const interval = preset.perInterval / (lanes * preset.ratePerLane);
+    if (interval !== lastInterval) {
+      lastInterval = interval;
+      currentSlot = -1;
+      usedInSlot = 0;
     }
 
-    if (acceptedCount >= DANMAKU_MAX_TOTAL) {
-      return false;
+    const slot = Math.floor(now() / interval);
+    if (slot !== currentSlot) {
+      currentSlot = slot;
+      usedInSlot = 0;
     }
 
-    if (credits < 1) {
-      return false;
-    }
+    if (usedInSlot >= preset.perInterval) return false;
 
-    credits -= 1;
-    acceptedCount += 1;
+    usedInSlot += 1;
     return true;
   };
 }
@@ -281,6 +347,8 @@ export interface DanmakuSettings {
   synchronousPlayback: boolean;
   /** 默认弹幕颜色 */
   color: string;
+  /** 弹幕密度挡位（不传给 artplayer，仅用于限流器） */
+  density: DanmakuDensity;
 }
 
 /** 将数值限制在 [min, max] 区间内，非法值返回 undefined */
@@ -358,6 +426,14 @@ export function pickDanmakuSettings(config: any): Partial<DanmakuSettings> {
     result.color = config.color;
   }
 
+  if (
+    config.density === 'sparse' ||
+    config.density === 'normal' ||
+    config.density === 'dense'
+  ) {
+    result.density = config.density;
+  }
+
   return result;
 }
 
@@ -404,14 +480,224 @@ export function saveDanmakuSettings(
  * 创建弹幕插件初始配置：默认配置叠加本地已保存的设置，刷新后可自动恢复。
  */
 export function createDanmakuInitialConfig(): any {
+  // density 只用于限流器，不作为 artplayer 插件的配置字段传入
+  const { density, ...saved } = loadDanmakuSettings();
+  setDanmakuDensity(density);
   return {
     ...createDanmakuDefaultConfig(),
-    ...loadDanmakuSettings(),
+    ...saved,
   };
 }
 
+/* ------------------------------------------------------------------ */
+/* HLS 内存缓冲预算                                                     */
+/* ------------------------------------------------------------------ */
+
+/** 1MB，按 1024 进制，和浏览器 MSE 的统计口径一致 */
+const MB = 1024 * 1024;
+
+/**
+ * 字节预算的安全系数。
+ *
+ * 播放列表里的 BANDWIDTH 是平均码率，实际分片（尤其是高动态画面）会短暂
+ * 高于它；留 15% 余量，避免"刚好算满"时先撞 SourceBuffer 配额。
+ */
+const BUFFER_SAFETY = 1.15;
+
+/** 前向缓冲的最小有效时长：再短就不足以抗抖动 */
+const MIN_FORWARD_SECONDS = 30;
+
+/** 单个 SourceBuffer 的最小字节预算，避免低码率时算出过小的值 */
+const MIN_BUFFER_BYTES = 32 * MB;
+
+/** 设备档位：0 宽裕 / 1 中等 / 2 紧张 */
+type DeviceTier = 0 | 1 | 2;
+
+/**
+ * 各档设备可安全占用的 MSE 字节预算。
+ *
+ * 取值参考 Chrome 桌面端与移动端 SourceBuffer 的常见配额，并给视频 + 音频
+ * 两个 SourceBuffer 留出余量；超出这个值更容易触发 `bufferFullError`。
+ */
+const DEVICE_BYTE_BUDGET: Record<DeviceTier, number> = {
+  0: 192 * MB,
+  1: 128 * MB,
+  2: 72 * MB,
+};
+
+/** 时长目标：[前向目标, 前向硬上限, 回看时长]（秒） */
+const TIME_TARGETS: Record<
+  'cacheOff' | 'cacheOn',
+  Record<DeviceTier, readonly [number, number, number]>
+> = {
+  // 未开缓存：内存缓冲就是抗抖动的资本，尽量拉长
+  cacheOff: {
+    0: [120, 600, 30],
+    1: [90, 360, 20],
+    2: [60, 180, 15],
+  },
+  // 已开缓存：Cache Storage 读出来几乎零延迟，内存缓冲只需保证平滑
+  cacheOn: {
+    0: [60, 300, 20],
+    1: [45, 240, 15],
+    2: [30, 120, 10],
+  },
+};
+
+export interface HlsBufferPlan {
+  /** 前向缓冲目标（秒） */
+  maxBufferLength: number;
+  /** 前向缓冲硬上限（秒） */
+  maxMaxBufferLength: number;
+  /** 已播放内容的保留时长（秒） */
+  backBufferLength: number;
+  /** MSE 单 SourceBuffer 字节预算（字节） */
+  maxBufferSize: number;
+  /** 目标时长装不进字节预算，已按字节预算回压时长（排查用） */
+  limitedByBytes: boolean;
+}
+
+export interface HlsBufferPlanInput {
+  /** 当前档位码率（bit/s）。未知时只按设备预算给出时长目标 */
+  levelBitrate?: number | null;
+  cacheEnabled?: boolean;
+  /** navigator.deviceMemory（GB，Chrome 上限 8） */
+  deviceMemory?: number;
+  hardwareConcurrency?: number;
+  /** 移动端 / 平板：MSE 配额通常比桌面紧张 */
+  mobile?: boolean;
+  saveData?: boolean;
+}
+
+function resolveDeviceTier(input: HlsBufferPlanInput): DeviceTier {
+  const memory = input.deviceMemory ?? 0;
+  const cores = input.hardwareConcurrency ?? 0;
+  if (
+    input.mobile ||
+    (memory > 0 && memory <= 2) ||
+    (cores > 0 && cores <= 2)
+  ) {
+    return 2;
+  }
+  if ((memory > 0 && memory <= 4) || (cores > 0 && cores <= 4)) return 1;
+  return 0;
+}
+
+/**
+ * 计算 hls.js 的内存缓冲计划。
+ *
+ * hls.js 里两个阈值是相乘关系：
+ *
+ *   maxBufLen = min(maxBufferLength, maxBufferSize / 码率)
+ *
+ * 所以固定 90MB 时，8Mbps 只装得下约 90s——**120s 的目标永远达不成**。
+ * 两套阈值互相打架：hls.js 以为自己还能往前装，实际早已顶到字节上限，
+ * 配额一紧就抛 `bufferFullError`，再走 flush 全缓冲的分支（画面回退）。
+ *
+ * 这里改成由「当前档位码率 × 目标时长」反推字节预算：
+ * - 装得下：字节预算按需放大（上限为设备预算），120s 真的能达成；
+ * - 装不下：字节预算封顶，同时把时长目标回压到能兑现的值，
+ *   保证 `maxBufferLength` 与 `maxBufferSize` 始终自洽。
+ */
+export function planHlsBuffer(input: HlsBufferPlanInput = {}): HlsBufferPlan {
+  const tier = resolveDeviceTier(input);
+  const [targetForward, targetMax, targetBack] =
+    TIME_TARGETS[input.cacheEnabled ? 'cacheOn' : 'cacheOff'][tier];
+
+  let maxBufferLength = targetForward;
+  let maxMaxBufferLength = targetMax;
+  const backBufferLength = targetBack;
+  if (input.saveData) {
+    maxBufferLength = Math.min(maxBufferLength, 45);
+    maxMaxBufferLength = Math.min(maxMaxBufferLength, 240);
+  }
+
+  const byteBudget = DEVICE_BYTE_BUDGET[tier];
+  const bitrate = Number(input.levelBitrate);
+  if (!Number.isFinite(bitrate) || bitrate <= 0) {
+    return {
+      maxBufferLength,
+      maxMaxBufferLength,
+      backBufferLength,
+      maxBufferSize: byteBudget,
+      limitedByBytes: false,
+    };
+  }
+
+  const bytesPerSecond = bitrate / 8;
+  const desired = Math.ceil(
+    (maxBufferLength + backBufferLength) * bytesPerSecond * BUFFER_SAFETY
+  );
+  if (desired <= byteBudget) {
+    return {
+      maxBufferLength,
+      maxMaxBufferLength,
+      backBufferLength,
+      // 不再固定 90MB，按码率与目标时长给足（8Mbps × 120s ≈ 172MB）
+      maxBufferSize: Math.max(MIN_BUFFER_BYTES, desired),
+      limitedByBytes: false,
+    };
+  }
+
+  // 字节预算装不下目标时长：回压时长，避免留下一个永远达不成的目标
+  const affordable = Math.floor(
+    byteBudget / BUFFER_SAFETY / bytesPerSecond - backBufferLength
+  );
+  maxBufferLength = Math.max(
+    MIN_FORWARD_SECONDS,
+    Math.min(maxBufferLength, affordable)
+  );
+  maxMaxBufferLength = Math.max(
+    maxBufferLength,
+    Math.min(maxMaxBufferLength, maxBufferLength * 3)
+  );
+  return {
+    maxBufferLength,
+    maxMaxBufferLength,
+    backBufferLength,
+    maxBufferSize: byteBudget,
+    limitedByBytes: true,
+  };
+}
+
+/** 读取当前设备能力并计算缓冲计划 */
+export function planCurrentHlsBuffer(
+  input: HlsBufferPlanInput = {}
+): HlsBufferPlan {
+  if (typeof navigator === 'undefined') return planHlsBuffer(input);
+  const nav = navigator as Navigator & {
+    deviceMemory?: number;
+    connection?: { saveData?: boolean };
+  };
+  return planHlsBuffer({
+    ...input,
+    deviceMemory: nav.deviceMemory,
+    hardwareConcurrency: nav.hardwareConcurrency,
+    saveData: nav.connection?.saveData,
+    mobile: /Android|iPhone|iPad|iPod|Mobile|HarmonyOS/i.test(
+      nav.userAgent || ''
+    ),
+  });
+}
+
+/** 写回 hls 实例；hls.js 每个 tick 都会读 config，运行期修改立即生效 */
+export function applyHlsBufferPlan(hls: any, plan: HlsBufferPlan): void {
+  const config = hls?.config;
+  if (!config) return;
+  config.maxBufferLength = plan.maxBufferLength;
+  config.maxMaxBufferLength = plan.maxMaxBufferLength;
+  config.backBufferLength = plan.backBufferLength;
+  config.maxBufferSize = plan.maxBufferSize;
+}
+
 export interface HlsLoaderOptions {
-  /** 是否过滤 m3u8 中的 #EXT-X-DISCONTINUITY（去广告） */
+  /**
+   * 是否从点播播放列表中剔除广告分片（设置面板里的「去广告」）。
+   *
+   * 只删除广告分片条目，`#EXT-X-DISCONTINUITY` / KEY / MAP 全部保留，
+   * 因此不会像旧实现那样制造时间轴空洞。直播列表与无法安全判定的
+   * 播放列表会原样返回。
+   */
   blockAd?: boolean;
   /** 片段缓存键是否走同源代理，必须与 VideoPrefetcher 保持一致 */
   useProxy?: boolean;
@@ -425,12 +711,28 @@ export interface HlsLoaderOptions {
  * 关键点：命中缓存时不能上报"耗时 0"。hls.js 的 ABR 用 EWMA 估算带宽，
  * 0 延迟会被当成无限带宽，导致下一批片段直接判到最高码率而卡顿。
  * 这里复用预取时记录的真实耗时，让带宽估算保持连续。
+ *
+ * 另一个必须满足的约束：各阶段时间必须自洽且单调。hls.js 在
+ * `onFragBuffered` 里这样反推"处理耗时"用于带宽采样：
+ *
+ *   processingMs = parsing.end - loading.start
+ *                  - min(loading.first - loading.start, bwEstimator.getEstimateTTFB())
+ *
+ * 如果像旧实现那样把 `parsing` / `buffering` 全填 0，这个差值就是
+ * `0 - (now - span) - ...` 的负数；`EwmaBandWidthEstimator.sample()` 会把负值
+ * 钳到 `minDelayMs`（50ms），等价于**每个命中缓存的分片都被当成 20–300 Mbps
+ * 的下载**。ABR 随即判到最高码率，真实带宽跟不上就卡顿，触发本站的弱网降档；
+ * 换档会 flush 前向缓冲，播放位置因此被打回，听起来就是"画面突然闪回、
+ * 音画不同步"。所以时间线要整体铺在 [start, end] 内：下载 80%、解析 20%。
  */
-function buildCachedStats(costMs: number, bytes: number): Record<string, unknown> {
+function buildCachedStats(
+  costMs: number,
+  bytes: number
+): Record<string, unknown> {
   const end = performance.now();
   const span = Math.max(1, costMs);
   const start = end - span;
-  const zero = { start: 0, first: 0, end: 0 };
+  const downloadEnd = start + span * 0.8;
   return {
     aborted: false,
     loaded: bytes,
@@ -438,16 +740,16 @@ function buildCachedStats(costMs: number, bytes: number): Record<string, unknown
     total: bytes,
     chunkCount: 1,
     bwEstimate: (bytes / span) * 1000,
-    loading: { start, first: start + span * 0.6, end },
-    parsing: { ...zero },
-    buffering: { ...zero },
+    loading: { start, first: start + span * 0.2, end: downloadEnd },
+    parsing: { start: downloadEnd, first: downloadEnd, end },
+    buffering: { start: end, first: end, end },
   };
 }
 
 /**
  * 创建「去广告 + 缓存优先」的 HLS Loader。
  *
- * - manifest / level：按需过滤 #EXT-X-DISCONTINUITY
+ * - manifest / level：按需剔除广告分片（不连续标记保持不变）
  * - fragment：先查 Cache Storage（由 VideoPrefetcher 预取填充），命中直接返回，
  *   未命中再走原 loader 回源。因此缓存未命中时行为与默认 loader 完全一致。
  */
@@ -456,7 +758,8 @@ export function createCustomHlsLoader(
   options: HlsLoaderOptions = {}
 ): any {
   const BaseLoader = Hls.DefaultConfig.loader;
-  const useAdFilter = options.blockAd !== false;
+  // 关闭时不改写播放列表，行为与默认 loader 完全一致
+  const useAdFilter = options.blockAd === true;
   const onProbe = options.onProbe ?? recordSegmentProbe;
 
   /**
@@ -466,9 +769,14 @@ export function createCustomHlsLoader(
    *  - 再叠加 readCachedSegment 内部的「相对路径/绝对 URL」双重兜底，
    *    基本能覆盖所有 key 不一致的情况。
    */
-  function candidateCacheKeys(contextUrl: string, range?: SegmentByteRange): string[] {
+  function candidateCacheKeys(
+    contextUrl: string,
+    range?: SegmentByteRange
+  ): string[] {
     const liveSettings =
-      typeof window !== 'undefined' ? loadCacheSettings() : DEFAULT_CACHE_SETTINGS;
+      typeof window !== 'undefined'
+        ? loadCacheSettings()
+        : DEFAULT_CACHE_SETTINGS;
     const preferredUseProxy =
       options.useProxy !== undefined ? options.useProxy : liveSettings.useProxy;
     const urls = new Set<string>();
@@ -512,21 +820,24 @@ export function createCustomHlsLoader(
         //   - url / uri: 实际请求地址
         // 这里做一次健壮的字段探测。
         const rawType =
-          (context && typeof context.type === 'string' ? context.type : undefined) ??
+          (context && typeof context.type === 'string'
+            ? context.type
+            : undefined) ??
           (cfg && typeof cfg.type === 'string' ? cfg.type : undefined);
         const rawUrl =
-          (context && (typeof context.url === 'string' || typeof context.uri === 'string')
-            ? (context.url || context.uri)
+          (context &&
+          (typeof context.url === 'string' || typeof context.uri === 'string')
+            ? context.url || context.uri
             : undefined) ??
           (cfg && (typeof cfg.url === 'string' || typeof cfg.uri === 'string')
-            ? (cfg.url || cfg.uri)
+            ? cfg.url || cfg.uri
             : undefined);
         const rangeStart = context?.rangeStart ?? cfg?.rangeStart;
         const rangeEnd = context?.rangeEnd ?? cfg?.rangeEnd;
         const type: string | undefined = rawType as any;
         const url = typeof rawUrl === 'string' ? rawUrl : '';
 
-        // ① 文本播放列表：去广告
+        // ① 文本播放列表：显式开启时剔除广告分片
         if (type === 'manifest' || type === 'level') {
           if (useAdFilter) {
             const onSuccess = callbacks.onSuccess;
@@ -536,7 +847,7 @@ export function createCustomHlsLoader(
               ctx: any
             ) {
               if (response.data && typeof response.data === 'string') {
-                response.data = filterAdsFromM3U8(response.data);
+                response.data = filterAdsFromM3U8(response.data, true);
               }
               return onSuccess(response, stats, ctx, null);
             };
@@ -548,19 +859,37 @@ export function createCustomHlsLoader(
         // ② 片段：缓存优先
         //    - 有效的 [rangeStart, rangeEnd) 使用独立缓存键，包含从 0 开始的区间。
         //      rangeEnd=0 / undefined 是 hls.js 的整文件哨兵，不应误判。
-        //    - 没有明确 type 时：用 URL 后缀/关键词启发式判断是不是视频/音频分片。
+        //    - 没有明确 type 时：优先用 hls.js 的 `context.frag` 判定，
+        //      URL 后缀/关键词只作为兜底启发式。
         const looksLikeFragment =
           /\.(ts|m4s|m4v|mp4|webm|aac|mp3)(\?|$)/i.test(url) ||
           /segment|fragment|clip|part|chunk|frag|plist/i.test(url);
-        const treatAsFragment = type === 'fragment' || (!type && looksLikeFragment);
+        /** 子播放列表 / 字幕等文本请求：即使 hls.js 塞了 frag 也不能当分片查询 */
+        const looksLikeTextResource = /\.(m3u8|m3u|vtt|webvtt)(\?|$)/i.test(
+          url
+        );
+        /**
+         * 分片判定。
+         *
+         * hls.js 1.6 的 `createLoaderContext()` 只给分片上下文塞
+         * `{ frag, part, responseType: 'arraybuffer', url, headers, rangeStart, rangeEnd }`，
+         * **没有 `type` 字段**（`type` 只出现在 manifest / level / track 等播放列表请求上），
+         * 所以 `type === 'fragment'` 实际永远不成立，过去全靠 URL 后缀猜。
+         *
+         * 采集站常把 TS 切片伪装成 `.jpeg` / `.jpg` / `.png`（响应头也是 image/jpeg，
+         * 内容仍是 TS），这类 URL 后缀猜不出来，于是缓存查询整段被跳过：
+         * 预取照常下载写入、播放却永远回源，命中率恒为 0。
+         * 因此以 `context.frag` 这个 hls.js 内部标志为主来判断。
+         */
+        const treatAsFragment =
+          !looksLikeTextResource &&
+          (type === 'fragment' ||
+            Boolean(context && context.frag) ||
+            (!type && looksLikeFragment));
         const range = normalizeByteRange(rangeStart, rangeEnd);
         const invalidRange = !range && (rangeStart > 0 || rangeEnd > 0);
 
-        if (
-          !treatAsFragment ||
-          invalidRange ||
-          typeof caches === 'undefined'
-        ) {
+        if (!treatAsFragment || invalidRange || typeof caches === 'undefined') {
           baseLoad(context, cfg, callbacks);
           return;
         }

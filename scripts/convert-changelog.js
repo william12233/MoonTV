@@ -86,30 +86,37 @@ function parseChangelog(content) {
   return { versions };
 }
 
+// 生成单引号字符串字面量，转义反斜杠与单引号，避免生成非法 TypeScript
+function toTsStringLiteral(value) {
+  return `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+}
+
+// 按 Prettier 的默认风格输出数组内容（6 空格缩进 + 尾逗号），
+// 保证生成结果与 lint-staged 格式化后的内容完全一致
+function formatEntries(entries, emptyComment) {
+  if (entries.length === 0) {
+    return `      ${emptyComment}`;
+  }
+
+  return entries
+    .map((entry) => `      ${toTsStringLiteral(entry)},`)
+    .join('\n');
+}
+
 function generateTypeScript(changelogData) {
   const entries = changelogData.versions
     .map((version) => {
-      const addedEntries = version.added
-        .map((entry) => `    "${entry}"`)
-        .join(',\n');
-      const changedEntries = version.changed
-        .map((entry) => `    "${entry}"`)
-        .join(',\n');
-      const fixedEntries = version.fixed
-        .map((entry) => `    "${entry}"`)
-        .join(',\n');
-
       return `  {
-    version: "${version.version}",
-    date: "${version.date}",
+    version: '${version.version}',
+    date: '${version.date}',
     added: [
-${addedEntries || '      // 无新增内容'}
+${formatEntries(version.added, '// 无新增内容')}
     ],
     changed: [
-${changedEntries || '      // 无变更内容'}
+${formatEntries(version.changed, '// 无变更内容')}
     ],
     fixed: [
-${fixedEntries || '      // 无修复内容'}
+${formatEntries(version.fixed, '// 无修复内容')}
     ]
   }`;
     })
@@ -134,11 +141,33 @@ export default changelog;
 `;
 }
 
+const CURRENT_VERSION_PATTERN = /const CURRENT_VERSION = ['"`][^'"`]+['"`];/;
+const CURRENT_VERSION_VALUE_PATTERN =
+  /const CURRENT_VERSION = ['"`]([^'"`]+)['"`];/;
+
+function getVersionTxtPath() {
+  return path.join(process.cwd(), 'VERSION.txt');
+}
+
+function getVersionTsPath() {
+  return path.join(process.cwd(), 'src/lib/version.ts');
+}
+
 function updateVersionFile(version) {
-  const versionTxtPath = path.join(process.cwd(), 'VERSION.txt');
+  const versionTxtPath = getVersionTxtPath();
+  const expectedContent = `${version}\n`;
   try {
-    fs.writeFileSync(versionTxtPath, version, 'utf8');
+    if (
+      fs.existsSync(versionTxtPath) &&
+      fs.readFileSync(versionTxtPath, 'utf8') === expectedContent
+    ) {
+      console.log(`✅ VERSION.txt 已是最新: ${version}`);
+      return false;
+    }
+
+    fs.writeFileSync(versionTxtPath, expectedContent, 'utf8');
     console.log(`✅ 已更新 VERSION.txt: ${version}`);
+    return true;
   } catch (error) {
     console.error(`❌ 无法更新 VERSION.txt:`, error.message);
     process.exit(1);
@@ -146,25 +175,117 @@ function updateVersionFile(version) {
 }
 
 function updateVersionTs(version) {
-  const versionTsPath = path.join(process.cwd(), 'src/lib/version.ts');
+  const versionTsPath = getVersionTsPath();
   try {
-    let content = fs.readFileSync(versionTsPath, 'utf8');
+    const content = fs.readFileSync(versionTsPath, 'utf8');
+
+    if (!CURRENT_VERSION_PATTERN.test(content)) {
+      console.error('❌ 未在 src/lib/version.ts 中找到 CURRENT_VERSION 常量');
+      process.exit(1);
+    }
 
     // 替换 CURRENT_VERSION 常量
     const updatedContent = content.replace(
-      /const CURRENT_VERSION = ['"`][^'"`]+['"`];/,
+      CURRENT_VERSION_PATTERN,
       `const CURRENT_VERSION = '${version}';`
     );
 
+    if (updatedContent === content) {
+      console.log(`✅ version.ts 已是最新: ${version}`);
+      return false;
+    }
+
     fs.writeFileSync(versionTsPath, updatedContent, 'utf8');
     console.log(`✅ 已更新 version.ts: ${version}`);
+    return true;
   } catch (error) {
     console.error(`❌ 无法更新 version.ts:`, error.message);
     process.exit(1);
   }
 }
 
-function main() {
+function verifyVersionFiles(latestVersion, expectedChangelogTs) {
+  const problems = [];
+
+  const versionTxtPath = getVersionTxtPath();
+  if (!fs.existsSync(versionTxtPath)) {
+    problems.push('VERSION.txt 不存在');
+  } else {
+    const actualVersion = fs.readFileSync(versionTxtPath, 'utf8').trim();
+    if (actualVersion !== latestVersion) {
+      problems.push(
+        `VERSION.txt 为 ${actualVersion}，CHANGELOG 最新版本为 ${latestVersion}`
+      );
+    }
+  }
+
+  const versionTsPath = getVersionTsPath();
+  if (!fs.existsSync(versionTsPath)) {
+    problems.push('src/lib/version.ts 不存在');
+  } else {
+    const versionTsContent = fs.readFileSync(versionTsPath, 'utf8');
+    const match = versionTsContent.match(CURRENT_VERSION_VALUE_PATTERN);
+    if (!match) {
+      problems.push('src/lib/version.ts 中未找到 CURRENT_VERSION 常量');
+    } else if (match[1] !== latestVersion) {
+      problems.push(
+        `version.ts 中 CURRENT_VERSION 为 ${match[1]}，CHANGELOG 最新版本为 ${latestVersion}`
+      );
+    }
+  }
+
+  const outputPath = path.join(process.cwd(), 'src/lib/changelog.ts');
+  if (!fs.existsSync(outputPath)) {
+    problems.push('src/lib/changelog.ts 不存在');
+  } else if (fs.readFileSync(outputPath, 'utf8') !== expectedChangelogTs) {
+    problems.push('src/lib/changelog.ts 与 CHANGELOG 不同步');
+  }
+
+  if (problems.length > 0) {
+    console.error('❌ 版本文件不同步:');
+    problems.forEach((problem) => console.error(`   - ${problem}`));
+    console.error(
+      '💡 请运行 `pnpm gen:version`（或 `node scripts/convert-changelog.js`）同步版本文件'
+    );
+    process.exit(1);
+  }
+
+  console.log(`✅ 版本文件已同步: ${latestVersion}`);
+}
+
+// 使用项目自身的 Prettier 配置格式化生成结果，
+// 避免与 lint-staged 的格式化步骤互相覆盖导致每次提交都产生大 diff
+async function formatWithPrettier(source, filePath) {
+  let prettier;
+  try {
+    prettier = require('prettier');
+  } catch (error) {
+    console.error(
+      '❌ 未找到 prettier，无法格式化生成文件，请先安装依赖（pnpm install）'
+    );
+    process.exit(1);
+  }
+
+  const config = (await prettier.resolveConfig(filePath)) || {};
+  const formatted = await prettier.format(source, {
+    ...config,
+    filepath: filePath,
+    // 仅从 .husky 搜索插件，避开 prettier-plugin-tailwindcss 的 ESM 兼容问题
+    pluginSearchDirs: [path.join(process.cwd(), '.husky')],
+  });
+
+  if (typeof formatted !== 'string') {
+    throw new Error('Prettier 未返回格式化后的字符串');
+  }
+
+  return formatted;
+}
+
+async function main() {
+  const args = process.argv.slice(2);
+  const checkOnly = args.includes('--check');
+  const skipVersion = args.includes('--no-version');
+
   try {
     const changelogPath = path.join(process.cwd(), 'CHANGELOG');
     const outputPath = path.join(process.cwd(), 'src/lib/changelog.ts');
@@ -185,31 +306,41 @@ function main() {
     console.log(`🔢 最新版本: ${latestVersion}`);
 
     console.log('正在生成 TypeScript 文件...');
-    const tsContent = generateTypeScript(changelogData);
+    const tsContent = await formatWithPrettier(
+      generateTypeScript(changelogData),
+      outputPath
+    );
 
-    // 确保输出目录存在
-    const outputDir = path.dirname(outputPath);
-    if (!fs.existsSync(outputDir)) {
-      fs.mkdirSync(outputDir, { recursive: true });
-    }
-
-    fs.writeFileSync(outputPath, tsContent, 'utf-8');
-
-    // 检查是否在 GitHub Actions 环境中运行
-    const isGitHubActions = process.env.GITHUB_ACTIONS === 'true';
-
-    if (isGitHubActions) {
-      // 在 GitHub Actions 中，更新版本文件
-      console.log('正在更新版本文件...');
-      updateVersionFile(latestVersion);
-      updateVersionTs(latestVersion);
+    if (checkOnly) {
+      // 校验模式：只检查，不写入任何文件
+      verifyVersionFiles(latestVersion, tsContent);
     } else {
-      // 在本地运行时，只提示但不更新版本文件
-      console.log('🔧 本地运行模式：跳过版本文件更新');
-      console.log('💡 版本文件更新将在 git tag 触发的 release 工作流中完成');
-    }
+      // 确保输出目录存在
+      const outputDir = path.dirname(outputPath);
+      if (!fs.existsSync(outputDir)) {
+        fs.mkdirSync(outputDir, { recursive: true });
+      }
 
-    console.log(`✅ 成功生成 ${outputPath}`);
+      if (
+        fs.existsSync(outputPath) &&
+        fs.readFileSync(outputPath, 'utf8') === tsContent
+      ) {
+        console.log(`✅ ${outputPath} 已是最新`);
+      } else {
+        fs.writeFileSync(outputPath, tsContent, 'utf-8');
+        console.log(`✅ 已生成 ${outputPath}`);
+      }
+
+      if (skipVersion) {
+        console.log('⏭️  已跳过 VERSION.txt / version.ts 更新 (--no-version)');
+      } else {
+        console.log('正在同步版本文件...');
+        updateVersionFile(latestVersion);
+        updateVersionTs(latestVersion);
+        // 写入后二次校验，避免更新逻辑失效却静默通过
+        verifyVersionFiles(latestVersion, tsContent);
+      }
+    }
     console.log(`📊 版本统计:`);
     changelogData.versions.forEach((version) => {
       console.log(
@@ -225,5 +356,8 @@ function main() {
 }
 
 if (require.main === module) {
-  main();
+  main().catch((error) => {
+    console.error('❌ 转换失败:', error);
+    process.exit(1);
+  });
 }

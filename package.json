@@ -16,6 +16,8 @@
     "format:check": "prettier -c .",
     "gen:manifest": "node scripts/generate-manifest.js",
     "gen:runtime": "node scripts/generate-runtime.js",
+    "gen:version": "node scripts/convert-changelog.js",
+    "check:version": "node scripts/convert-changelog.js --check",
     "restore:sw": "node scripts/restore-sw.js",
     "prepare": "husky install",
     "pages:build": "npx @cloudflare/next-on-pages"

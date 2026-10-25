@@ -82,6 +82,13 @@ export interface PrefetchOptions {
   /** 覆盖 settings.useProxy：直连失败时是否允许代理兜底 */
   useProxy?: boolean;
   /**
+   * 解析播放列表时是否剔除广告分片（与播放器「去广告」开关保持一致）。
+   *
+   * 两边必须一致：播放器的 level 播放列表已被过滤，预取器若按未过滤的
+   * 列表记录时间轴，`startTime/endTime` 会整体偏移广告时长。
+   */
+  dropAds?: boolean;
+  /**
    * 期望缓存的画面高度（如 1080）。
    *
    * 主播放列表有多个码率档位时，预取器默认取最高带宽；用户手动把画质切到
@@ -156,7 +163,14 @@ async function retrySegmentDownload<T>(
     try {
       return await download();
     } catch (error) {
-      if (signal.aborted || attempt >= SEGMENT_RETRY_DELAYS_MS.length) {
+      // CORS / DNS / 403 这类错误重试直连没有意义，直接交给代理兜底，
+      // 否则每个分片要白等 1+2+4 秒，控制台还会刷满 CORS 报错。
+      const noRetry = (error as { noRetry?: boolean } | null)?.noRetry === true;
+      if (
+        signal.aborted ||
+        noRetry ||
+        attempt >= SEGMENT_RETRY_DELAYS_MS.length
+      ) {
         throw error;
       }
       // 重试等待与分片请求使用同一信号，切集时不会留下延迟下载。
@@ -276,7 +290,7 @@ export class VideoPrefetcher {
 
     const sourceKey = `${options.m3u8Url}|${
       options.useProxy ?? settings.useProxy
-    }`;
+    }|${options.dropAds ? 'noads' : 'ads'}`;
     const sameEpisode =
       this.episodeKey === options.episodeKey && this.sourceKey === sourceKey;
     // 档位变了（用户手动切画质）就必须重建队列：不同档位的分片 URL 不同，
@@ -483,22 +497,33 @@ export class VideoPrefetcher {
       this.emit(options, { state: 'parsing', message: undefined }, true);
       let task: Awaited<ReturnType<typeof parseM3U8>>;
       try {
-        // 档位透传给解析器：主播放列表有多个码率时只取与当前播放一致的那一档
+        // 档位透传给解析器：主播放列表有多个码率时只取与当前播放一致的那一档。
+        // allowProxyFallback：采集站普遍对浏览器直连做反盗链（403 + 无 ACAO），
+        // 而分片下载早有代理兜底；播放列表不兜底会让整轮预热直接失败。
         task = await parseM3U8(options.m3u8Url, 0, {
           height: options.preferredHeight ?? null,
           signal,
+          allowProxyFallback: useProxy,
+          dropAds: options.dropAds === true,
         });
-      } catch {
+      } catch (error) {
         if (signal.aborted) return;
         this.controller = null;
+        const reason =
+          error instanceof Error && error.message ? `：${error.message}` : '';
         this.emit(
           options,
-          { state: 'error', message: '播放列表解析失败' },
+          { state: 'error', message: `播放列表解析失败${reason}` },
           true
         );
         return;
       }
       if (signal.aborted) return;
+      if (options.dropAds) {
+        // 与播放器使用同一份过滤结果；这里只在 debug 下提示一下段数
+        // eslint-disable-next-line no-console
+        console.debug(`[prefetch] 去广告解析：${task.tsUrlList.length} 段`);
+      }
       if (task.tsUrlList.length === 0) {
         this.controller = null;
         this.emit(options, { state: 'error', message: '播放列表为空' }, true);
@@ -794,7 +819,14 @@ export class VideoPrefetcher {
                   });
                   if (!response.ok) {
                     await response.body?.cancel();
-                    throw new Error(`HTTP ${response.status}`);
+                    const httpError = new Error(
+                      `HTTP ${response.status}`
+                    ) as Error & { noRetry?: boolean };
+                    // 鉴权/防盗链/不存在：换路由才有意义
+                    if ([401, 403, 404, 410].includes(response.status)) {
+                      httpError.noRetry = true;
+                    }
+                    throw httpError;
                   }
                   const expectedBytes = range
                     ? range.end - range.start
@@ -808,7 +840,13 @@ export class VideoPrefetcher {
                 } catch (error) {
                   const interrupted =
                     request.signal.aborted && !requests.signal.aborted;
-                  if (!interrupted) throw error;
+                  if (!interrupted) {
+                    // TypeError 基本是 CORS / DNS / 连接被拒，重试直连无用
+                    if (error instanceof TypeError) {
+                      (error as Error & { noRetry?: boolean }).noRetry = true;
+                    }
+                    throw error;
+                  }
                 } finally {
                   this.activeRequests.delete(request);
                   requests.signal.removeEventListener('abort', cancel);
