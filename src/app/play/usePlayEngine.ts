@@ -189,6 +189,9 @@ const DANMAKU_SETTING_NAME = '弹幕源';
 /** 自动加载弹幕的常驻提示文案 */
 const DANMAKU_LOADING_NOTICE_TEXT = '正在自动加载弹幕…';
 
+/** 手动选择弹幕源时的常驻提示文案 */
+const DANMAKU_MANUAL_LOADING_NOTICE_TEXT = '正在加载弹幕…';
+
 /**
  * 下一集预热的覆盖时长（秒）。
  *
@@ -282,6 +285,10 @@ export function usePlayEngine() {
   const [detail, setDetail] = useState<SearchResult | null>(null);
   const [isDanmakuPluginReady, setIsDanmakuPluginReady] = useState(false);
   const [isDanmakuLoading, setIsDanmakuLoading] = useState(false);
+  /** 弹幕加载来源：自动匹配 / 手动选择，决定加载提示文案 */
+  const [danmakuLoadingKind, setDanmakuLoadingKind] = useState<
+    'auto' | 'manual'
+  >('auto');
 
   // 跳过片头片尾配置
   const [skipConfig, setSkipConfig] = useState<SkipConfig>({
@@ -369,6 +376,8 @@ export function usePlayEngine() {
     number | undefined
   >(undefined);
   const [showDanmakuSelector, setShowDanmakuSelector] = useState(false);
+  /** 手动选择弹幕源的版本号：即使重复选中同一番剧/集数也重新走一遍加载流程 */
+  const [danmakuSelectNonce, setDanmakuSelectNonce] = useState(0);
   const [showCacheManager, setShowCacheManager] = useState(false);
   const selectedDanmakuSourceRef = useRef<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -433,11 +442,14 @@ export function usePlayEngine() {
     if (!currentEpisodeTitle) return;
 
     let matchedEpisode: any = null;
+    /** 是否为用户手动选择：与切集自动加载一致，先隐藏旧弹幕、显示加载提示 */
+    let isManualSelect = false;
 
     /** ① 用户手动选择某一集（权重大最高） */
     if (selectedDanmakuEpisode !== undefined && selectedState) {
       matchedEpisode =
         selectedDanmakuAnime.episodes[selectedDanmakuEpisode - 1];
+      isManualSelect = true;
       setSelectedState(false);
     } else if (autoDanmakuEnabled) {
       /** ② 自动匹配模式：直接使用第 0 集 */
@@ -466,44 +478,70 @@ export function usePlayEngine() {
           episodeNumber,
           'xml'
         );
-        if (
-          danmukuPluginInstanceRef.current &&
-          url !== lastDanmakuUrlRef.current
-        ) {
-          const inst = danmukuPluginInstanceRef.current;
-          console.log('动态更新弹幕源:', url);
-          inst.config({ danmuku: url });
+        const inst = danmukuPluginInstanceRef.current;
 
-          // 切集时弹幕已隐藏，load() 内部会在远端返回后 reset 并写入新队列，
-          // 完成后再恢复可见性，因此这里不需要额外 reset（避免重复清屏卡顿）
-          inst
-            .load()
-            .then(() => {
-              if (lastDanmakuUrlRef.current === url) {
-                scheduleDanmakuVisibleRestore();
-              }
-            })
-            .catch((e: unknown) => {
-              console.error('加载弹幕失败:', e);
-              if (lastDanmakuUrlRef.current === url) {
-                // 加载失败时清空旧集弹幕再恢复，避免恢复后显示错误内容
-                try {
-                  inst.reset?.();
-                } catch (_) {
-                  // 忽略：插件版本差异
-                }
-                scheduleDanmakuVisibleRestore();
-              }
-            });
-
-          lastDanmakuUrlRef.current = url;
-          setCurrentTooltip(matchedEpisode.episodeTitle);
+        // 插件未就绪时无法加载，避免手动选择后一直停留在「加载中」
+        if (!inst) {
+          if (isManualSelect) setIsDanmakuLoading(false);
+          return;
         }
+
+        // 与当前已加载的弹幕源相同：无需重新加载，直接恢复可见性
+        if (url === lastDanmakuUrlRef.current) {
+          if (isManualSelect) {
+            setIsDanmakuLoading(false);
+            scheduleDanmakuVisibleRestore();
+          }
+          return;
+        }
+
+        // 手动选择时与切集自动加载一致：先隐藏旧弹幕并提示加载
+        if (isManualSelect) beginManualDanmakuLoad();
+
+        console.log('动态更新弹幕源:', url);
+        inst.config({ danmuku: url });
+
+        // 切集/手动选择时弹幕已隐藏，load() 内部会在远端返回后 reset 并写入
+        // 新队列，完成后再恢复可见性，因此这里不需要额外 reset（避免重复清屏卡顿）
+        inst
+          .load()
+          .then(() => {
+            if (lastDanmakuUrlRef.current === url) {
+              if (isManualSelect) setIsDanmakuLoading(false);
+              scheduleDanmakuVisibleRestore();
+            }
+          })
+          .catch((e: unknown) => {
+            console.error('加载弹幕失败:', e);
+            if (lastDanmakuUrlRef.current === url) {
+              // 加载失败时清空旧集弹幕再恢复，避免恢复后显示错误内容
+              try {
+                inst.reset?.();
+              } catch (_) {
+                // 忽略：插件版本差异
+              }
+              if (isManualSelect) setIsDanmakuLoading(false);
+              scheduleDanmakuVisibleRestore();
+            }
+          });
+
+        lastDanmakuUrlRef.current = url;
+        setCurrentTooltip(matchedEpisode.episodeTitle);
       } catch (e) {
         console.error('获取弹幕 URL 失败:', e);
+        // 手动选择失败时同样要恢复弹幕，避免一直处于隐藏状态
+        if (isManualSelect) {
+          setIsDanmakuLoading(false);
+          scheduleDanmakuVisibleRestore();
+        }
       }
     })();
-  }, [currentEpisodeIndex, selectedDanmakuAnime, selectedDanmakuEpisode]);
+  }, [
+    currentEpisodeIndex,
+    selectedDanmakuAnime,
+    selectedDanmakuEpisode,
+    danmakuSelectNonce,
+  ]);
 
   // 同步最新值到 refs
   useEffect(() => {
@@ -746,6 +784,51 @@ export function usePlayEngine() {
       pendingDanmakuVisibleRestoreRef.current = null;
       danmakuVisibleRestoreTimerRef.current = null;
     }, DANMAKU_VISIBLE_RESTORE_DELAY_MS);
+  };
+
+  /**
+   * 手动选择弹幕源时，沿用切集自动加载的同一套流程：
+   * 先隐藏旧弹幕并展示加载提示，待新弹幕加载完成后再恢复可见性。
+   */
+  const beginManualDanmakuLoad = () => {
+    setDanmakuLoadingKind('manual');
+
+    // 切集流程已经隐藏过弹幕时沿用其待恢复状态，
+    // 不能把隐藏后的 false 当成用户原本的可见性
+    if (pendingDanmakuVisibleRestoreRef.current === null) {
+      const currentInst = danmukuPluginInstanceRef.current as any;
+      const currentVisible =
+        typeof currentInst?.visible === 'boolean'
+          ? currentInst.visible
+          : !!danmakuConfigRef.current.visible;
+      pendingDanmakuVisibleRestoreRef.current = currentVisible;
+    }
+
+    if (danmakuVisibleRestoreTimerRef.current) {
+      clearTimeout(danmakuVisibleRestoreTimerRef.current);
+      danmakuVisibleRestoreTimerRef.current = null;
+    }
+
+    danmakuConfigRef.current.visible = false;
+
+    const inst = danmukuPluginInstanceRef.current as any;
+    if (!inst) return;
+
+    try {
+      inst.config({ visible: false });
+    } catch (_) {
+      // ignore
+    }
+
+    try {
+      if (typeof inst.visible === 'boolean') {
+        inst.visible = false;
+      }
+    } catch (_) {
+      // ignore
+    }
+
+    setIsDanmakuLoading(true);
   };
 
   // -----------------------------------------------------------------------------
@@ -1366,6 +1449,7 @@ export function usePlayEngine() {
     let success = false;
 
     const fetchDanmaku = async () => {
+      setDanmakuLoadingKind('auto');
       setIsDanmakuLoading(true);
       while (!success && (retryCount === -1 || attempt <= retryCount)) {
         attempt++;
@@ -1462,15 +1546,21 @@ export function usePlayEngine() {
       return;
     }
 
-    pushPlayerNotice(art, DANMAKU_LOADING_NOTICE_TEXT, {
-      key: 'danmaku-loading',
-      durationMs: 0,
-    });
+    pushPlayerNotice(
+      art,
+      danmakuLoadingKind === 'manual'
+        ? DANMAKU_MANUAL_LOADING_NOTICE_TEXT
+        : DANMAKU_LOADING_NOTICE_TEXT,
+      {
+        key: 'danmaku-loading',
+        durationMs: 0,
+      }
+    );
 
     return () => {
       clearPlayerNotices(art, 'danmaku-loading');
     };
-  }, [isDanmakuLoading, playerHost]);
+  }, [isDanmakuLoading, danmakuLoadingKind, playerHost]);
 
   // -----------------------------------------------------------------------------
   // 播放记录与跳过配置恢复
@@ -3611,6 +3701,8 @@ export function usePlayEngine() {
     setSelectedDanmakuAnime(anime);
     setSelectedDanmakuEpisode(episodeNumber);
     setSelectedState(true);
+    // 重复确认同一来源时依赖项不会变化，这里显式触发一次加载流程
+    setDanmakuSelectNonce((n) => n + 1);
   };
 
   const handleDanmakuClose = () => {

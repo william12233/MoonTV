@@ -2,9 +2,19 @@
 
 'use client';
 
-import { Cat, Clapperboard, Clover, Compass, Film, Home, Search, Tv } from 'lucide-react';
+import {
+  Cat,
+  Clapperboard,
+  Clover,
+  Compass,
+  Film,
+  Home,
+  Search,
+  Trophy,
+  Tv,
+} from 'lucide-react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useSearchParams } from 'next/navigation';
 import { memo, useEffect, useState } from 'react';
 
 import { useNavigationLoading } from './NavigationLoadingProvider';
@@ -18,10 +28,14 @@ interface MobileBottomNavProps {
 
 const MobileBottomNav = ({ activePath }: MobileBottomNavProps) => {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const { startLoading } = useNavigationLoading();
 
-  // 当前激活路径：优先使用传入的 activePath，否则回退到浏览器地址
-  const currentActive = activePath ?? pathname;
+  // 当前激活路径：优先使用传入的 activePath，否则使用「路径 + 查询参数」。
+  // 必须带上查询参数，否则 /douban?type=xxx 这类导航项永远无法匹配到激活状态。
+  const searchQuery = searchParams?.toString() ?? '';
+  const currentActive =
+    activePath ?? (searchQuery ? `${pathname}?${searchQuery}` : pathname);
 
   const [navItems] = useState([
     { icon: Home, label: '首页', href: '/' },
@@ -56,6 +70,11 @@ const MobileBottomNav = ({ activePath }: MobileBottomNavProps) => {
       label: '综艺',
       href: '/douban?type=show',
     },
+    {
+      icon: Trophy,
+      label: '榜单',
+      href: '/ranking',
+    },
   ]);
 
   // 检查是否启用简洁模式 - 使用状态管理
@@ -73,17 +92,28 @@ const MobileBottomNav = ({ activePath }: MobileBottomNavProps) => {
   }, []);
 
   const isActive = (href: string) => {
-    const typeMatch = href.match(/type=([^&]+)/)?.[1];
-
     // 解码URL以进行正确的比较
     const decodedActive = decodeURIComponent(currentActive);
     const decodedItemHref = decodeURIComponent(href);
 
-    return (
-      decodedActive === decodedItemHref ||
-      (decodedActive.startsWith('/douban') &&
-        decodedActive.includes(`type=${typeMatch}`))
-    );
+    const [itemPath, itemQuery = ''] = decodedItemHref.split('?');
+    const [activePath, activeQuery = ''] = decodedActive.split('?');
+
+    // 带查询参数的导航项（如 /douban?type=movie）：先看完全匹配，
+    // 再看路径一致且 type 一致（查询参数顺序可能不同）
+    if (itemQuery) {
+      if (decodedActive === decodedItemHref) return true;
+      if (activePath !== itemPath) return false;
+      const itemType = itemQuery.match(/type=([^&]+)/)?.[1] ?? '';
+      const activeType =
+        activeQuery.match(/type=([^&]+)/)?.[1] ??
+        // /douban 未携带 type 时，页面默认展示电影
+        (itemPath === '/douban' ? 'movie' : '');
+      return itemType !== '' && itemType === activeType;
+    }
+
+    // 不带查询参数的导航项（如 /、/search、/ranking）：路径一致即视为激活
+    return activePath === itemPath;
   };
 
   return (
@@ -99,12 +129,12 @@ const MobileBottomNav = ({ activePath }: MobileBottomNavProps) => {
       <ul className='flex items-center overflow-x-auto scrollbar-hide'>
         {navItems.map((item) => {
           const active = isActive(item.href);
-          
+
           // 简洁模式下只显示首页和搜索，但在服务器端渲染时先不渲染
           if (!isClient) {
             return null; // 服务器端渲染时不显示任何内容，避免闪烁
           }
-          
+
           if (simpleMode && !['/', '/search'].includes(item.href)) {
             return null;
           }
@@ -115,7 +145,7 @@ const MobileBottomNav = ({ activePath }: MobileBottomNavProps) => {
               className='flex-shrink-0'
               style={{
                 width: simpleMode ? '50vw' : '20vw',
-                minWidth: simpleMode ? '50vw' : '20vw'
+                minWidth: simpleMode ? '50vw' : '20vw',
               }}
             >
               <Link
@@ -129,10 +159,11 @@ const MobileBottomNav = ({ activePath }: MobileBottomNavProps) => {
                 }}
               >
                 <item.icon
-                  className={`h-6 w-6 ${active
+                  className={`h-6 w-6 ${
+                    active
                       ? 'text-green-600 dark:text-green-400'
                       : 'text-gray-500 dark:text-gray-400'
-                    }`}
+                  }`}
                 />
                 <span
                   className={

@@ -10,7 +10,6 @@ import {
 } from '@/lib/douban.client';
 import type { DoubanItem } from '@/lib/types';
 
-import { BackButton } from '@/components/BackButton';
 import DoubanCardSkeleton from '@/components/DoubanCardSkeleton';
 import PageLayout from '@/components/PageLayout';
 import VideoCard from '@/components/VideoCard';
@@ -62,7 +61,11 @@ function RankingClient() {
     void (async () => {
       setIsLoadingMore(true);
       try {
-        const result = await getDoubanCollection(activeId, currentPage * 25, 25);
+        const result = await getDoubanCollection(
+          activeId,
+          currentPage * 25,
+          25
+        );
         if (result.code === 200) {
           setData((prev) => [...prev, ...result.list]);
           setHasMore(result.list.length !== 0);
@@ -94,16 +97,13 @@ function RankingClient() {
   return (
     <PageLayout activePath='/ranking'>
       <div className='px-4 sm:px-10 py-4 sm:py-8'>
-        <div className='mb-6 flex items-center gap-3'>
-          <BackButton showLabel />
-          <div>
-            <h1 className='text-2xl sm:text-3xl font-bold text-gray-800 dark:text-gray-200'>
-              豆瓣榜单
-            </h1>
-            <p className='text-sm text-gray-600 dark:text-gray-400'>
-              来自豆瓣的精选榜单
-            </p>
-          </div>
+        <div className='mb-6'>
+          <h1 className='text-2xl sm:text-3xl font-bold text-gray-800 dark:text-gray-200'>
+            豆瓣榜单
+          </h1>
+          <p className='text-sm text-gray-600 dark:text-gray-400'>
+            来自豆瓣的精选榜单
+          </p>
         </div>
 
         {/* 榜单切换 */}
@@ -127,7 +127,9 @@ function RankingClient() {
         <div className='max-w-[95%] mx-auto'>
           <div className='grid grid-cols-3 gap-x-2 gap-y-12 sm:grid-cols-[repeat(auto-fill,minmax(160px,1fr))] sm:gap-x-8 sm:gap-y-20'>
             {loading
-              ? Array.from({ length: 25 }, (_, i) => <DoubanCardSkeleton key={i} />)
+              ? Array.from({ length: 25 }, (_, i) => (
+                  <DoubanCardSkeleton key={i} />
+                ))
               : data.map((item, index) => (
                   <div key={`${item.title}-${index}`} className='w-full'>
                     <VideoCard
