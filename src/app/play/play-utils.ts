@@ -7,7 +7,10 @@
  * 便于后续单元测试与复用。
  */
 
-import { stripAdSegmentsFromM3U8 } from '@/lib/ad-filter';
+import {
+  stripAdSegmentsByMediaProfile,
+  stripAdSegmentsFromM3U8,
+} from '@/lib/ad-filter';
 import {
   type SegmentByteRange,
   normalizeByteRange,
@@ -16,6 +19,7 @@ import {
   buildSegmentCacheKey,
   DEFAULT_CACHE_SETTINGS,
   loadCacheSettings,
+  probeSegmentProfileCacheFirst,
   readCachedSegment,
   recordSegmentProbe,
   touchMeta,
@@ -55,7 +59,7 @@ export function formatTime(seconds: number): string {
 }
 
 /**
- * 按需剔除播放列表中的广告分片。
+ * 按需剔除播放列表中的广告分片（仅结构特征，同步）。
  *
  * 旧实现只删除 `#EXT-X-DISCONTINUITY` 行：既不删广告分片，又丢掉 PTS
  * 断点信息，时间轴因此出现空洞（拖动报 `bufferSeekOverHole`、画面回推、
@@ -70,6 +74,38 @@ export function filterAdsFromM3U8(
 ): string {
   if (!m3u8Content || !removeAds) return m3u8Content;
   return stripAdSegmentsFromM3U8(m3u8Content);
+}
+
+/**
+ * 按需剔除播放列表中的广告分片（结构特征 + 分片媒体参数，异步）。
+ *
+ * 采集站的 VIP 线路会把广告重新编码后拼进正片：没有 CUE 标记、分片地址
+ * 是同 CDN 的随机哈希、块时长与正文同量级，纯结构规则一条都命不中。
+ * 这类广告由 `stripAdSegmentsByMediaProfile()` 读取分片头部的 SPS，
+ * 按「与正文画面尺寸不一致」来判定（详见 `@/lib/ad-filter`）。
+ *
+ * 探测只读每个块首分片的前 4KB，且**先从 Cache Storage 里取**（预取过的分片
+ * 零网络请求），结果按 URL 缓存、播放器与预取器共用同一条链路
+ * （`probeSegmentProfileCacheFirst`）。任何失败都会退回同步版本，因此这里
+ * 永远不会把播放列表改坏。
+ *
+ * @param baseUrl 播放列表地址，用于解析相对分片地址
+ * @param removeAds 是否启用（设置面板里的「去广告」）；默认关闭
+ */
+export async function filterAdsFromM3U8Async(
+  m3u8Content: string,
+  baseUrl?: string,
+  removeAds = false
+): Promise<string> {
+  if (!m3u8Content || !removeAds) return m3u8Content;
+  try {
+    return await stripAdSegmentsByMediaProfile(m3u8Content, {
+      baseUrl,
+      probe: probeSegmentProfileCacheFirst,
+    });
+  } catch {
+    return stripAdSegmentsFromM3U8(m3u8Content);
+  }
 }
 
 /** 弹幕密度挡位；默认挡位为 `normal`（标准） */
@@ -846,10 +882,25 @@ export function createCustomHlsLoader(
               stats: any,
               ctx: any
             ) {
-              if (response.data && typeof response.data === 'string') {
-                response.data = filterAdsFromM3U8(response.data, true);
+              const data = response?.data;
+              if (typeof data !== 'string') {
+                return onSuccess(response, stats, ctx, null);
               }
-              return onSuccess(response, stats, ctx, null);
+              // 需要读分片头才能判断「广告是不是另一套编码」，所以这里必须
+              // 异步等待；filterAdsFromM3U8Async 内部已兜住所有异常，最坏
+              // 情况就是退回同步的结构特征过滤。
+              const baseUrl =
+                typeof response?.url === 'string' && response.url
+                  ? response.url
+                  : url || undefined;
+              void filterAdsFromM3U8Async(data, baseUrl, true).then(
+                (filtered) => {
+                  // 探测期间 hls.js 可能已经取消（seek / 切码率 / 卸载）
+                  if (cancelled) return;
+                  response.data = filtered;
+                  onSuccess(response, stats, ctx, null);
+                }
+              );
             };
           }
           baseLoad(context, cfg, callbacks);

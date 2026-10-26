@@ -6,7 +6,10 @@
 
 import CryptoJS from 'crypto-js';
 
-import { stripAdSegmentsFromM3U8 } from './ad-filter';
+import {
+  stripAdSegmentsByMediaProfile,
+  stripAdSegmentsFromM3U8,
+} from './ad-filter';
 import { inferHeightFromBitrate } from './hls-quality';
 import { StreamingTransmuxer, transmuxTSToMP4 } from './mp4-transmuxer';
 import { fetchMediaUrl } from './url-guard';
@@ -16,6 +19,7 @@ import {
   parseByteRange,
   readByteRangeResponse,
 } from './video-byte-range';
+import { probeSegmentProfileCacheFirst } from './video-cache';
 
 export type StreamSaverMode = 'disabled' | 'service-worker' | 'file-system';
 
@@ -150,6 +154,14 @@ export interface PreferredVariant {
    * 时间轴记录 startTime/endTime，与 hls.js 的播放时间对不上。
    */
   dropAds?: boolean;
+  /**
+   * 去广告时额外探测分片媒体参数（画面宽高）。
+   *
+   * 采集站的 VIP 线路把广告重新编码后拼进正片，播放列表里没有任何结构
+   * 特征，只能读分片头部的 SPS 才能识别（见 `@/lib/ad-filter`）。
+   * 只能在浏览器侧开启：服务端解析不应额外拉取大量分片头。
+   */
+  probeMediaProfile?: boolean;
 }
 
 /** 从 `RESOLUTION=1920x1080` 中取出高度 */
@@ -321,6 +333,37 @@ async function fetchPlaylistText(
 }
 
 /**
+ * 去广告的播放列表处理。
+ *
+ * 默认只做结构特征过滤；`probeMediaProfile` 打开时再加一层分片媒体参数
+ * 探测（读每个块首分片的前 4KB，按画面尺寸 + 帧率找出另一套编码的广告块）。
+ * 探测只允许在浏览器侧发生，且任何异常都要退回同步版本。
+ *
+ * 这里必须和播放器 Loader 用**同一个**探测函数（缓存优先）：预取器走网络、
+ * 播放器走缓存的话，遇到直连 403 的源就会出现「播放器删了广告、预取器没删」，
+ * 两边的分片时间轴相差一个广告时长。
+ */
+async function filterPlaylistAds(
+  playlistText: string,
+  baseUrl: string,
+  preferred: PreferredVariant
+): Promise<string> {
+  const canProbe =
+    preferred.probeMediaProfile === true &&
+    !preferred.validateUrls &&
+    typeof window !== 'undefined';
+  if (!canProbe) return stripAdSegmentsFromM3U8(playlistText);
+  try {
+    return await stripAdSegmentsByMediaProfile(playlistText, {
+      baseUrl,
+      probe: probeSegmentProfileCacheFirst,
+    });
+  } catch {
+    return stripAdSegmentsFromM3U8(playlistText);
+  }
+}
+
+/**
  * 解析M3U8文件（支持主播放列表自动解析）
  *
  * @param preferred 主播放列表的选档偏好，透传到递归的子播放列表解析
@@ -341,7 +384,7 @@ export async function parseM3U8(
   );
   url = baseUrl;
   const m3u8Str = preferred?.dropAds
-    ? stripAdSegmentsFromM3U8(playlistText)
+    ? await filterPlaylistAds(playlistText, baseUrl, preferred)
     : playlistText;
 
   if (m3u8Str.substring(0, 7).toUpperCase() !== '#EXTM3U') {

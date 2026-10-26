@@ -10,6 +10,14 @@
  *   3. 跨域片段经 SW 拦截拿到的是 opaque response，cache.put 存不了内容。
  */
 
+import {
+  type MediaProfile,
+  MEDIA_PROFILE_HEAD_BYTES,
+  parseMediaProfileHead,
+  probeSegmentProfile,
+  readResponseHeadBytes,
+  rememberSegmentProfile,
+} from './segment-media-probe';
 import { type SegmentByteRange } from './video-byte-range';
 
 /** 片段响应体的 Cache Storage 桶名 */
@@ -949,6 +957,76 @@ export async function readCachedSegment(
   } catch {
     return null;
   }
+}
+
+/**
+ * 从 Cache Storage 里读某个分片的**头部**（只读前几 KB）。
+ *
+ * 注意：不能用 `readCachedSegment()`——它会把整片（1–2MB）`arrayBuffer()` 读进
+ * 内存，44 个块轮一遍就是近百 MB 的瞬时分配，手机上很容易触发 GC 抖动。
+ * 这里直接拿 `Response.body` 流，读够 `limit` 就 cancel。
+ */
+async function readCachedSegmentHead(
+  segmentUrl: string,
+  limit: number
+): Promise<Uint8Array | null> {
+  const cache = await openVideoCache();
+  if (!cache) return null;
+  for (const useProxy of [true, false]) {
+    const key = buildSegmentCacheKey(segmentUrl, useProxy);
+    for (const candidate of getCacheKeyVariants(key)) {
+      let hit: Response | undefined;
+      try {
+        hit = await cache.match(candidate);
+      } catch {
+        return null;
+      }
+      if (!hit) continue;
+      const head = await readResponseHeadBytes(hit, limit);
+      if (head && head.length > 0) return head;
+    }
+  }
+  return null;
+}
+
+/** 只查缓存（零网络）：命中则返回该分片的编码参数 */
+export async function probeCachedSegmentProfile(
+  segmentUrl: string
+): Promise<MediaProfile | null> {
+  if (!segmentUrl || !isCacheStorageAvailable()) return null;
+  try {
+    const head = await readCachedSegmentHead(
+      segmentUrl,
+      MEDIA_PROFILE_HEAD_BYTES
+    );
+    return head ? parseMediaProfileHead(head) : null;
+  } catch {
+    // 配额 / 隐私模式 / 缓存被清空：当作没缓存，交给调用方决定是否回源
+    return null;
+  }
+}
+
+/**
+ * 去广告用的分片探测：**缓存优先，零请求**。
+ *
+ * 播放器与预取器都按「结构特征 + 分片媒体参数」过滤同一份播放列表，而分片
+ * 大多已经被预取写进 Cache Storage（上次播放 / 本次预取 / 拖动重解析）。
+ * 两边必须用**完全同一条链路**：只要一方走缓存、另一方走网络，遇到防盗链的
+ * 源就会出现「播放器读到参数删了广告、预取器 403 没删」——两个时间轴差一段
+ * 广告时长，缓存元数据的开始时间、进度条覆盖区间全部错位。
+ *
+ * 命中缓存时探测开销为 0 网络请求；只有确实没缓存的分片才回源读 4KB。
+ */
+export async function probeSegmentProfileCacheFirst(
+  segmentUrl: string
+): Promise<MediaProfile | null> {
+  const cached = await probeCachedSegmentProfile(segmentUrl);
+  if (cached) {
+    // 回写共享缓存：另一个调用方解析同一份播放列表时直接命中
+    rememberSegmentProfile(segmentUrl, cached);
+    return cached;
+  }
+  return probeSegmentProfile(segmentUrl);
 }
 
 /** 供调试：indexedDB 是否可用 */

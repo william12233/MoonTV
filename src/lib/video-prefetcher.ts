@@ -505,6 +505,9 @@ export class VideoPrefetcher {
           signal,
           allowProxyFallback: useProxy,
           dropAds: options.dropAds === true,
+          // 与播放器 Loader 用同一套「结构特征 + 分片媒体参数」规则，
+          // 否则预取时间轴会多出广告那一段，缓存与播放位置对不上。
+          probeMediaProfile: options.dropAds === true,
         });
       } catch (error) {
         if (signal.aborted) return;
@@ -834,7 +837,28 @@ export class VideoPrefetcher {
                   if (Number.isFinite(expectedBytes) && expectedBytes > 0) {
                     observePrefetchSegment(expectedBytes);
                   }
-                  const buffer = await readByteRangeResponse(response, range);
+                  let buffer: ArrayBuffer;
+                  try {
+                    buffer = await readByteRangeResponse(response, range);
+                  } catch (error) {
+                    /**
+                     * 响应体读到一半断开（`arrayBuffer()` 抛 TypeError
+                     * “Connection closed”之类）属于**可重试的传输故障**，
+                     * 不能和 CORS / DNS / 连接被拒混为一谈：那些重试直连
+                     * 确实没用，而断流重试一次往往就好了。
+                     *
+                     * 这里换成普通 Error 重新抛出，避免被下面的
+                     * `error instanceof TypeError` 打上 `noRetry`，
+                     * 否则会白白切到代理、多绕一圈同源转发。
+                     */
+                    const bodyError = new Error(
+                      `响应体读取失败：${
+                        error instanceof Error ? error.message : String(error)
+                      }`
+                    ) as Error & { noRetry?: boolean };
+                    bodyError.noRetry = false;
+                    throw bodyError;
+                  }
                   observePrefetchSegment(buffer.byteLength);
                   return { response, buffer };
                 } catch (error) {
