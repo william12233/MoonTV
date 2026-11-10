@@ -273,19 +273,19 @@ export async function searchAnime(
 
 export async function matchAnime(fileName: string, signal?: AbortSignal) {
   if (!fileName) {
-    throw new Error("fileName 不能为空");
+    throw new Error('fileName 不能为空');
   }
 
   const baseUrl = getDanmakuApiBaseUrl();
 
   try {
     const response = await fetch(`${baseUrl}/api/v2/match`, {
-      method: "POST",
+      method: 'POST',
       headers: {
-        "Content-Type": "application/json"
+        'Content-Type': 'application/json',
       },
       body: JSON.stringify({ fileName }),
-      signal
+      signal,
     });
 
     if (!response.ok) {
@@ -298,7 +298,7 @@ export async function matchAnime(fileName: string, signal?: AbortSignal) {
     return json.matches || [];
   } catch (err) {
     // eslint-disable-next-line no-console
-    console.error("matchAnime 失败:", err);
+    console.error('matchAnime 失败:', err);
     throw err;
   }
 }
@@ -391,25 +391,95 @@ export interface VideoInfo {
 }
 
 /**
+ * 解析中文数字（支持 一 ~ 九十九 与「两」），无法解析时返回 null。
+ *
+ * 弹幕源返回的标题普遍写作「好兆头第二季」「双城之战：第二季」这类**中文数字**
+ * 季数，上一版只认 `\d+`，导致「第二季」被判成第 1 季，自动匹配请求就变成
+ * `好兆头第二季 S1E1 @平台`，永远只能拿到第一季第一集的弹幕。
+ */
+function parseChineseNumber(text: string): number | null {
+  if (!text) return null;
+  if (/^\d+$/.test(text)) return parseInt(text, 10);
+
+  const digits: Record<string, number> = {
+    零: 0,
+    一: 1,
+    二: 2,
+    两: 2,
+    三: 3,
+    四: 4,
+    五: 5,
+    六: 6,
+    七: 7,
+    八: 8,
+    九: 9,
+  };
+
+  const tenIndex = text.indexOf('十');
+  if (tenIndex === -1) {
+    // 纯个位序列（兼容「二二」这类写法，通常只有一位）
+    let value = 0;
+    for (const ch of text) {
+      const digit = digits[ch];
+      if (digit === undefined) return null;
+      value = value * 10 + digit;
+    }
+    return value;
+  }
+
+  // 十 / 十X / X十 / X十Y
+  const head = text.slice(0, tenIndex);
+  const tail = text.slice(tenIndex + 1);
+  const tens = head ? digits[head] : 1;
+  if (tens === undefined) return null;
+
+  let ones = 0;
+  if (tail) {
+    if (tail.length !== 1 || digits[tail] === undefined) return null;
+    ones = digits[tail];
+  }
+  return tens * 10 + ones;
+}
+
+/**
  * 从标题中提取季数（Season）
+ *
+ * 支持「第二季 / 第2季 / 第 2 期」「Season 2 / S02 / S2」「2nd Season」等写法，
+ * 没有季数信息时才回退到第 1 季。
+ *
  * @param title 动漫标题
  * @returns 季数（从 1 开始），如果无法提取则返回 1
  */
 export function extractSeasonFromTitle(title: string): number {
   if (!title) return 1;
 
-  title = title.toLowerCase();
+  const text = title.toLowerCase();
 
-  // 正则1：S01、S1、Season 1、Season01
-  const match = title.match(/(?:season|s)\s*?(\d{1,2})/i);
-  if (match && match[1]) {
-    return Number(match[1]);
+  // 1. 中文「第X季 / 第X期 / 第X部」，X 同时支持阿拉伯数字与中文数字
+  const cnSeason = text.match(
+    /第\s*([0-9]+|[零一二两三四五六七八九十]+)\s*[季期部]/
+  );
+  const cnNumber = cnSeason ? parseChineseNumber(cnSeason[1]) : null;
+  if (cnNumber !== null && cnNumber >= 1 && cnNumber <= 99) {
+    return cnNumber;
   }
 
-  // 正则2：中文“第1季、第2季”
-  const cnMatch = title.match(/第\s*(\d+)\s*季/);
-  if (cnMatch && cnMatch[1]) {
-    return Number(cnMatch[1]);
+  // 2. 英文序数：2nd Season / 3rd season
+  const ordinalMatch = text.match(/(\d{1,2})\s*(?:st|nd|rd|th)\s*season/);
+  if (ordinalMatch && ordinalMatch[1]) {
+    return Number(ordinalMatch[1]);
+  }
+
+  // 3. Season 1、Season01（season 前不能紧跟字母，避免误伤单词）
+  const seasonMatch = text.match(/(?:^|[^a-z])season\s*(\d{1,2})/);
+  if (seasonMatch && seasonMatch[1]) {
+    return Number(seasonMatch[1]);
+  }
+
+  // 4. S01、S1、S 2（要求前面不是字母、后面不接数字/字母）
+  const shortMatch = text.match(/(?:^|[^a-z])s\s*(\d{1,2})(?![0-9a-z])/);
+  if (shortMatch && shortMatch[1]) {
+    return Number(shortMatch[1]);
   }
 
   // 默认季别
